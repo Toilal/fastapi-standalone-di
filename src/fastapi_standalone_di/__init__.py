@@ -12,8 +12,11 @@ from fastapi_standalone_di.registration import (
 from fastapi_standalone_di.resolve import (
     DependantCache,
     DependencyOverrides,
+    DependencyScope,
     FastAPIContainer,
+    ResolutionScope,
     ResolvedDependencies,
+    ScopeError,
     get_container,
 )
 
@@ -23,9 +26,12 @@ __all__ = [
     "AppState",
     "DependantCache",
     "DependencyOverrides",
+    "DependencyScope",
     "FastAPIContainer",
     "RegistrableDependency",
+    "ResolutionScope",
     "ResolvedDependencies",
+    "ScopeError",
     "__version__",
     "get_app_state",
     "get_container",

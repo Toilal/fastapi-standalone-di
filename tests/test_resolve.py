@@ -300,12 +300,12 @@ class TestInstanceCache:
         leaf2 = await c.get(ILeafDep)
         assert leaf1 is not leaf2
 
-    async def test_generator_deps_not_cached_across_calls(self) -> None:
-        """Generator dependencies are re-created on each resolve() call."""
+    async def test_generator_deps_cached_at_container_scope(self) -> None:
+        """At CONTAINER scope (default), generator deps are shared across calls."""
         c = FastAPIContainer()
         dep1 = await c.get(IYieldDep)
         dep2 = await c.get(IYieldDep)
-        assert dep1 is not dep2
+        assert dep1 is dep2
 
 
 class TestTeardown:

@@ -58,9 +58,11 @@ asyncio.run(main())
 - `container.resolve(a, b, ...)` — resolve several; returns a `ResolvedDependencies`
   you query with `.get(dep)` / `.optional(dep)`.
 - `container.invoke(fn)` — resolve `fn`'s `Depends()` parameters and call it (entry point, not cached).
+- `container.scope()` — open a short-lived scope (see [Dependency scopes](#dependency-scopes)).
 
-Resolved instances are cached on the container for reuse across calls.
-`await container.aclose()` closes the container and runs any `yield` teardown.
+By default, resolved instances are cached on the container for reuse across calls
+(container scope). `await container.aclose()` closes the container and runs any
+`yield` teardown.
 
 ### `yield` dependencies and teardown
 
@@ -181,12 +183,92 @@ async def main() -> None:
     assert db is not None
 ```
 
+## Dependency scopes
+
+Each dependency has a **scope** that decides its lifetime and when its `yield`
+teardown runs:
+
+- **`CONTAINER`** (default) — one instance per container, torn down at `aclose()`.
+- **`SCOPED`** — one instance per active scope, torn down when that scope closes.
+
+A scope is opened explicitly with `async with container.scope()`, and implicitly
+around `container.invoke(fn)`. Resolving a `SCOPED` dependency outside a scope
+raises `ScopeError` — use a scope (or `invoke`) for those.
+
+The scope is configurable globally with `default_scope` and per dependency with
+`scopes`; the per-dependency map wins. `default_scope` also accepts a dict
+mapping FastAPI's `Depends(scope=...)` literals (`"request"` / `"function"`, plus
+`None` for no explicit scope) to a `DependencyScope`.
+
+```python
+import asyncio
+from collections.abc import AsyncIterator
+
+from fastapi import Depends
+
+from fastapi_standalone_di import DependencyScope, FastAPIContainer
+
+
+class Session:
+    async def close(self) -> None: ...
+
+
+async def get_session() -> AsyncIterator[Session]:
+    session = Session()
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+class Repository:
+    def __init__(self, session: Session = Depends(get_session)) -> None:
+        self.session = session
+
+
+async def handler(repo: Repository = Depends(Repository)) -> Session:
+    return repo.session
+
+
+async def main() -> None:
+    # The session and its repository live for one scope; anything else stays
+    # container-scoped (a singleton per container).
+    container = FastAPIContainer(
+        scopes={
+            get_session: DependencyScope.SCOPED,
+            Repository: DependencyScope.SCOPED,
+        },
+    )
+
+    async with container.scope() as scope:
+        repo = await scope.get(Repository)
+        assert isinstance(repo.session, Session)
+    # session.close() has run here, at scope exit
+
+    await container.invoke(handler)  # opens a scope implicitly around the call
+    # the session used by handler is closed once invoke() returns
+
+    await container.aclose()
+
+
+asyncio.run(main())
+```
+
+Orthogonally to the scope, FastAPI's `use_cache` (default `True`) controls whether
+an instance is shared between consumers within a scope or created fresh at each
+injection point. A `yield` dependency's resources stay open until the scope that
+owns it closes — so a fresh (`use_cache=False`) generator at `CONTAINER` scope is
+held until `aclose()`; put transient resources in a `SCOPED` scope sized as one
+unit of work.
+
 ## How it works
 
 The container asks FastAPI for the dependency tree of your callable
 (`fastapi.dependencies.utils.get_dependant`), resolves sub-dependencies
 recursively, and invokes each callable with the right execution model
 (coroutine, sync in a threadpool, sync/async generator via an `AsyncExitStack`).
+Each dependency is cached and torn down on the exit stack of its scope — the
+container's for `CONTAINER`, the resolution scope's for `SCOPED`.
 Request/header/query/cookie/path parameters — which don't exist outside ASGI —
 fall back to a stub `Request` and their declared defaults.
 
