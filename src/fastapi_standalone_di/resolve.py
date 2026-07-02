@@ -47,7 +47,7 @@ from fastapi import Depends
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
-from starlette.requests import HTTPConnection, Request
+from starlette.requests import Request
 
 from fastapi_standalone_di._compat import (
     is_async_gen_callable,
@@ -454,21 +454,28 @@ class FastAPIContainer:
             if sub_dep.name is not None:
                 sub_values[sub_dep.name] = sub_instance
 
-        # Outside ASGI, request objects, headers, query/path params are not
-        # available. Provide a stub Request and use declared defaults for
-        # header/query/path params so the dependency chain works in standalone.
-        sig = inspect.signature(effective_call)
-        for param_name, param in sig.parameters.items():
-            if param_name in sub_values:
+        # Outside ASGI, request/connection objects and header/query/path params
+        # are not available. Provide a stub Request for connection parameters and
+        # declared defaults for the rest so the dependency chain still works.
+        #
+        # Identify connection parameters by the names FastAPI resolved from the
+        # typed hints (stable across the supported range), not by re-inspecting
+        # annotations: under ``from __future__ import annotations`` the latter are
+        # plain strings and a runtime type check would silently miss them.
+        sig_params = inspect.signature(effective_call).parameters
+        for conn_param in (
+            getattr(dependant, "request_param_name", None),
+            getattr(dependant, "http_connection_param_name", None),
+            getattr(dependant, "websocket_param_name", None),
+        ):
+            if conn_param is None or conn_param in sub_values:
                 continue
-            hint = param.annotation
-            if (
-                hint is not inspect.Parameter.empty
-                and isinstance(hint, type)
-                and issubclass(hint, HTTPConnection)
-                and param.default is not None
-            ):
-                sub_values[param_name] = _STUB_REQUEST
+            # Preserve the optional-connection pattern (e.g. ``request: Request =
+            # None``, as used by get_app_state): leave it to its default.
+            param = sig_params.get(conn_param)
+            if param is not None and param.default is None:
+                continue
+            sub_values[conn_param] = _STUB_REQUEST
 
         for param_field in (
             *dependant.header_params,
