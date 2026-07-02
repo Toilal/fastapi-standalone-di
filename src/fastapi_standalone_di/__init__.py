@@ -1,0 +1,34 @@
+"""Use FastAPI's dependency injection outside of any web/ASGI context."""
+
+from fastapi_standalone_di.app_state import (
+    AppState,
+    get_app_state,
+    set_app_state_value,
+)
+from fastapi_standalone_di.registration import (
+    RegistrableDependency,
+    patch_for_registrable_dependency_support,
+)
+from fastapi_standalone_di.resolve import (
+    DependantCache,
+    DependencyOverrides,
+    FastAPIContainer,
+    ResolvedDependencies,
+    get_container,
+)
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "AppState",
+    "DependantCache",
+    "DependencyOverrides",
+    "FastAPIContainer",
+    "RegistrableDependency",
+    "ResolvedDependencies",
+    "__version__",
+    "get_app_state",
+    "get_container",
+    "patch_for_registrable_dependency_support",
+    "set_app_state_value",
+]
