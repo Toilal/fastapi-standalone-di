@@ -230,9 +230,11 @@ class FastAPIContainer:
         """Resolve all ``Depends()`` parameters of *call* and invoke it.
 
         Unlike :meth:`resolve`, this does **not** cache the result — the
-        callable is treated as an entry point, not a reusable dependency.
+        callable is treated as an entry point, not a reusable dependency. Its
+        sub-dependencies are still resolved through (and cached on) the
+        container as usual.
         """
-        return await self._resolve_single(call)
+        return await self._resolve_single(call, cache=False)
 
     async def resolve(
         self,
@@ -281,9 +283,16 @@ class FastAPIContainer:
     async def _resolve_single(
         self,
         call: Callable[..., Any],
+        *,
+        cache: bool = True,
     ) -> Any:
-        """Recursively resolve a single dependency and all its sub-dependencies."""
-        if call in self._instance_cache:
+        """Recursively resolve a single dependency and all its sub-dependencies.
+
+        *cache* controls only the caching of *call* itself (its
+        sub-dependencies are always resolved through the container's cache);
+        :meth:`invoke` passes ``cache=False`` to treat *call* as an entry point.
+        """
+        if cache and call in self._instance_cache:
             return self._instance_cache[call]
 
         # Apply overrides: if the original callable has an override, use it instead.
@@ -350,7 +359,7 @@ class FastAPIContainer:
 
         # Only cache non-generator dependencies at container level — generators
         # are tied to the exit_stack lifecycle of the container.
-        if not (async_gen or sync_gen):
+        if cache and not (async_gen or sync_gen):
             self._instance_cache[call] = instance
         return instance
 
