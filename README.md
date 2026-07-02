@@ -270,7 +270,12 @@ recursively, and invokes each callable with the right execution model
 Each dependency is cached and torn down on the exit stack of its scope — the
 container's for `CONTAINER`, the resolution scope's for `SCOPED`.
 Request/header/query/cookie/path parameters — which don't exist outside ASGI —
-fall back to a stub `Request` and their declared defaults.
+fall back to a stub `Request` and their declared defaults. A dependency
+declaring `response: Response` receives a fresh stub whose header/cookie/status
+mutations are accepted but have no transport effect (nothing sends it). A
+dependency declaring `background_tasks: BackgroundTasks` receives a real
+`BackgroundTasks`; tasks added with `add_task(...)` run when the owning scope
+closes (`aclose()` for `CONTAINER`, scope exit for `SCOPED`).
 
 ## Requirements
 
