@@ -4,10 +4,11 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 
 import pytest
-from fastapi import Depends
+from fastapi import BackgroundTasks, Depends, Response
 
 from fastapi_standalone_di import (
     DependantCache,
+    DependencyScope,
     FastAPIContainer,
     RegistrableDependency,
     ResolvedDependencies,
@@ -325,3 +326,88 @@ class TestTeardown:
             assert result == "sync-yielded"
             assert _sync_yield_cleanup_called is False
         assert _sync_yield_cleanup_called is True
+
+
+# --- Response / BackgroundTasks injection ----------------------------------
+
+
+def _dep_with_response(response: Response) -> Response:
+    """A dependency setting a header/cookie/status on the injected response."""
+    response.status_code = 201
+    response.headers["X-Custom"] = "value"
+    response.set_cookie("session", "abc")
+    return response
+
+
+_background_ran: list[str] = []
+
+
+def _dep_with_background_tasks(background_tasks: BackgroundTasks) -> BackgroundTasks:
+    """A dependency registering a background task via ``add_task``."""
+
+    async def _task(label: str) -> None:
+        _background_ran.append(label)
+
+    background_tasks.add_task(_task, "done")
+    return background_tasks
+
+
+class TestResponseInjection:
+    async def test_response_param_resolves(self) -> None:
+        """A dependency with a ``Response`` param resolves standalone."""
+        c = FastAPIContainer()
+        response = await c.get(_dep_with_response)
+        assert isinstance(response, Response)
+
+    async def test_response_mutations_do_not_raise(self) -> None:
+        """Header/cookie/status mutations on the stub response are accepted."""
+        c = FastAPIContainer()
+        response = await c.get(_dep_with_response)
+        assert response.status_code == 201
+        assert response.headers["X-Custom"] == "value"
+        assert "session=abc" in response.headers["set-cookie"]
+
+    async def test_each_resolution_gets_fresh_response(self) -> None:
+        """Non-cached resolutions get independent response stubs."""
+        c = FastAPIContainer()
+        r1 = await c.invoke(_dep_with_response)
+        r2 = await c.invoke(_dep_with_response)
+        assert r1 is not r2
+
+
+class TestBackgroundTasksInjection:
+    @pytest.fixture(autouse=True)
+    def _reset_ran(self) -> Iterator[None]:
+        _background_ran.clear()
+        yield
+        _background_ran.clear()
+
+    async def test_background_tasks_param_resolves(self) -> None:
+        """A dependency with a ``BackgroundTasks`` param resolves standalone."""
+        c = FastAPIContainer()
+        tasks = await c.get(_dep_with_background_tasks)
+        assert isinstance(tasks, BackgroundTasks)
+
+    async def test_add_task_is_accepted(self) -> None:
+        """``add_task`` collects the task without raising."""
+        c = FastAPIContainer()
+        tasks = await c.get(_dep_with_background_tasks)
+        assert len(tasks.tasks) == 1
+
+    async def test_tasks_run_on_aclose(self) -> None:
+        """CONTAINER-scoped collected tasks execute when the container closes."""
+        c = FastAPIContainer()
+        await c.get(_dep_with_background_tasks)
+        assert _background_ran == []
+        await c.aclose()
+        assert _background_ran == ["done"]
+
+    async def test_scoped_tasks_run_on_scope_close(self) -> None:
+        """SCOPED collected tasks execute when their scope closes, not before."""
+        c = FastAPIContainer(
+            scopes={_dep_with_background_tasks: DependencyScope.SCOPED}
+        )
+        async with c.scope() as scope:
+            await scope.get(_dep_with_background_tasks)
+            assert _background_ran == []
+        assert _background_ran == ["done"]

@@ -43,7 +43,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from enum import Enum
 from typing import Any, cast, overload
 
-from fastapi import Depends
+from fastapi import BackgroundTasks, Depends, Response
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
@@ -476,6 +476,24 @@ class FastAPIContainer:
             if param is not None and param.default is None:
                 continue
             sub_values[conn_param] = _STUB_REQUEST
+
+        # A dependency may declare ``response: Response`` (to set headers/cookies/
+        # status) or ``background_tasks: BackgroundTasks``. FastAPI records the
+        # parameter names on the ``Dependant``. Standalone there is no transport,
+        # so inject stubs: a fresh ``Response`` whose mutations are accepted but
+        # have no effect (nothing sends it), and a ``BackgroundTasks`` whose
+        # collected tasks run when the owning scope closes — registered on that
+        # scope's exit stack (the container's for CONTAINER, the resolution
+        # scope's for SCOPED).
+        response_param_name = getattr(dependant, "response_param_name", None)
+        if response_param_name is not None and response_param_name not in sub_values:
+            sub_values[response_param_name] = Response()
+
+        bg_param_name = getattr(dependant, "background_tasks_param_name", None)
+        if bg_param_name is not None and bg_param_name not in sub_values:
+            background_tasks = BackgroundTasks()
+            sub_values[bg_param_name] = background_tasks
+            exit_stack.push_async_callback(background_tasks)
 
         for param_field in (
             *dependant.header_params,
