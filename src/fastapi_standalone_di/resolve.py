@@ -19,11 +19,28 @@ Example usage::
         dependency_overrides={get_db: lambda: mock_db},
     )
     service = await container.get(IUserService)
+
+Dependency scopes
+-----------------
+Each dependency has a :class:`DependencyScope` deciding its lifetime and the
+moment its ``yield`` teardown runs:
+
+* ``CONTAINER`` (default) — one instance per container, torn down at
+  :meth:`FastAPIContainer.aclose`.
+* ``SCOPED`` — one instance per active scope, torn down when that scope closes.
+  A scope is opened explicitly with ``async with container.scope()`` (and
+  implicitly around :meth:`FastAPIContainer.invoke`).
+
+The scope is configurable globally (``default_scope``) and per dependency
+(``scopes``). Orthogonally, FastAPI's ``use_cache`` controls whether an instance
+is shared between consumers within a scope (``True``, the default) or created
+fresh at each injection point (``False``).
 """
 
 import inspect
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from enum import Enum
 from typing import Any, cast, overload
 
 from fastapi import Depends
@@ -54,6 +71,27 @@ _STUB_REQUEST = Request(
 )
 
 DependencyOverrides = dict[Callable[..., Any], Callable[..., Any]]
+
+
+class DependencyScope(Enum):
+    """Lifetime and teardown boundary of a resolved dependency."""
+
+    CONTAINER = "container"
+    """One instance per container, torn down at :meth:`FastAPIContainer.aclose`."""
+
+    SCOPED = "scoped"
+    """One instance per active scope, torn down when that scope closes."""
+
+
+# Global default: a single scope, or a mapping from FastAPI's ``Depends(scope=)``
+# literals ("request"/"function") — plus ``None`` for dependencies without an
+# explicit FastAPI scope — to a :class:`DependencyScope`.
+DefaultScope = DependencyScope | dict[str | None, DependencyScope]
+Scopes = dict[Callable[..., Any], DependencyScope]
+
+
+class ScopeError(RuntimeError):
+    """Raised on a scope misuse (e.g. resolving a SCOPED dependency without a scope)."""
 
 
 class DependantCache:
@@ -162,15 +200,22 @@ class FastAPIContainer:
     """Dependency container that resolves FastAPI dependencies outside ASGI.
 
     Encapsulates the configuration needed to resolve a dependency tree:
-    application state, dependency overrides, and introspection cache.
+    application state, dependency overrides, introspection cache, and the
+    :class:`DependencyScope` policy.
 
     Example::
 
         container = FastAPIContainer(
             app_state=AppState.from_app(app),
             dependency_overrides={get_db: lambda: mock_db},
+            default_scope=DependencyScope.CONTAINER,
+            scopes={get_db_session: DependencyScope.SCOPED},
         )
         service = await container.get(IMyService)
+
+        async with container.scope() as scope:
+            session = await scope.get(get_db_session)
+        # SCOPED dependencies torn down here; CONTAINER ones survive until aclose()
     """
 
     def __init__(
@@ -178,6 +223,8 @@ class FastAPIContainer:
         app_state: AppState | None = None,
         dependency_overrides: DependencyOverrides | None = None,
         dependant_cache: DependantCache | bool = True,
+        default_scope: DefaultScope = DependencyScope.CONTAINER,
+        scopes: Scopes | None = None,
     ) -> None:
         self._app_state = app_state if app_state is not None else AppState.standalone()
         self._dependency_overrides = dependency_overrides or {}
@@ -190,19 +237,33 @@ class FastAPIContainer:
         else:
             dc = None
         self._dependant_cache = dc
-        self._instance_cache: dict[Callable[..., Any], Any] = {
+
+        self._default_scope = default_scope
+        self._scopes = scopes or {}
+
+        self._container_instances: dict[Callable[..., Any], Any] = {
             get_app_state: self._app_state,
         }
-        self._exit_stack = AsyncExitStack()
+        self._container_stack = AsyncExitStack()
 
     def clear_cache(self) -> None:
-        """Drop all cached dependency instances.
+        """Drop all cached container-scoped instances.
 
-        The ``get_app_state`` seed is preserved so subsequent
-        :meth:`resolve` calls still work.
+        The ``get_app_state`` seed is preserved so subsequent :meth:`resolve`
+        calls still work. Does not run teardown — closing generator
+        dependencies still happens at :meth:`aclose`.
         """
-        self._instance_cache.clear()
-        self._instance_cache[get_app_state] = self._app_state
+        self._container_instances.clear()
+        self._container_instances[get_app_state] = self._app_state
+
+    def scope(self) -> "ResolutionScope":
+        """Open a resolution scope for ``SCOPED`` dependencies.
+
+        Use as an async context manager; ``SCOPED`` dependencies resolved
+        through the returned object are torn down when the ``async with`` block
+        exits, while ``CONTAINER`` dependencies remain owned by the container.
+        """
+        return ResolutionScope(self)
 
     @overload
     async def get[T](self, dependency: type[T]) -> T: ...
@@ -229,21 +290,23 @@ class FastAPIContainer:
     async def invoke(self, call: Callable[..., Any]) -> Any:
         """Resolve all ``Depends()`` parameters of *call* and invoke it.
 
-        Unlike :meth:`resolve`, this does **not** cache the result — the
-        callable is treated as an entry point, not a reusable dependency. Its
-        sub-dependencies are still resolved through (and cached on) the
-        container as usual.
+        Runs inside an implicit resolution scope: ``SCOPED`` dependencies used
+        by *call* are torn down once *call* returns. Unlike :meth:`resolve`,
+        the result is not cached — the callable is treated as an entry point.
         """
-        return await self._resolve_single(call, cache=False)
+        async with self.scope() as scope:
+            return await scope.invoke(call)
 
     async def resolve(
         self,
         *dependencies: Callable[..., Any],
     ) -> ResolvedDependencies:
-        """Resolve one or more FastAPI dependencies.
+        """Resolve one or more FastAPI dependencies at container scope.
 
-        Resolved instances are cached on the container: subsequent calls
-        reuse previously resolved dependencies without re-invoking them.
+        Resolved ``CONTAINER`` instances are cached on the container: subsequent
+        calls reuse them. Resolving a ``SCOPED`` dependency here raises
+        :class:`ScopeError` — open a :meth:`scope` (or use :meth:`invoke`) for
+        those.
 
         Parameters
         ----------
@@ -257,18 +320,11 @@ class FastAPIContainer:
         ResolvedDependencies
             A container holding all resolved instances.
         """
-        instances: dict[Callable[..., Any], Any] = {}
-
-        for dep in dependencies:
-            resolved_callable = _resolve_callable(dep)
-            instance = await self._resolve_single(resolved_callable)
-            instances[resolved_callable] = instance
-
-        return ResolvedDependencies(instances)
+        return await self._resolve_many(dependencies, active_scope=None)
 
     async def aclose(self) -> None:
-        """Close the container, running teardown for any ``yield`` dependencies."""
-        await self._exit_stack.aclose()
+        """Close the container, running teardown for CONTAINER ``yield`` deps."""
+        await self._container_stack.aclose()
 
     async def __aenter__(self) -> "FastAPIContainer":
         return self
@@ -276,24 +332,90 @@ class FastAPIContainer:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
+    # --- internals ---------------------------------------------------------
+
     def _apply_overrides(self, call: Callable[..., Any]) -> Callable[..., Any]:
         """Apply dependency overrides, returning the substitute if one exists."""
         return self._dependency_overrides.get(call, call)
+
+    def _scope_of(
+        self,
+        original: Callable[..., Any],
+        resolved: Callable[..., Any],
+        fastapi_scope: str | None,
+    ) -> DependencyScope:
+        """Determine a dependency's scope.
+
+        Precedence: the ``scopes`` map (keyed by either the declared callable or
+        its resolved implementation) wins; then, if ``default_scope`` is a dict,
+        the FastAPI ``Depends(scope=)`` value is mapped through it; otherwise the
+        single ``default_scope`` applies. ``get_app_state`` is always CONTAINER.
+        """
+        if original is get_app_state or resolved is get_app_state:
+            return DependencyScope.CONTAINER
+        for key in (original, resolved):
+            override = self._scopes.get(key)
+            if override is not None:
+                return override
+        default = self._default_scope
+        if isinstance(default, dict):
+            if fastapi_scope in default:
+                return default[fastapi_scope]
+            return default.get(None, DependencyScope.CONTAINER)
+        return default
+
+    def _target(
+        self,
+        active_scope: "ResolutionScope | None",
+        dep_scope: DependencyScope,
+        call: Callable[..., Any],
+    ) -> tuple[dict[Callable[..., Any], Any], AsyncExitStack]:
+        """Return the (instance cache, exit stack) a dependency of *dep_scope* uses."""
+        if dep_scope is DependencyScope.CONTAINER:
+            return self._container_instances, self._container_stack
+        if active_scope is None:
+            name = getattr(call, "__qualname__", repr(call))
+            raise ScopeError(
+                f"{name} is SCOPED but was resolved without an active scope. "
+                "Open one with `async with container.scope() as scope: "
+                "await scope.get(...)`, or use `container.invoke(...)`."
+            )
+        return active_scope._scope_instances, active_scope._scope_stack
+
+    async def _resolve_many(
+        self,
+        dependencies: tuple[Callable[..., Any], ...],
+        *,
+        active_scope: "ResolutionScope | None",
+    ) -> ResolvedDependencies:
+        instances: dict[Callable[..., Any], Any] = {}
+        for dep in dependencies:
+            resolved = _resolve_callable(dep)
+            dep_scope = self._scope_of(dep, resolved, None)
+            instances[resolved] = await self._resolve_single(
+                resolved, active_scope=active_scope, dep_scope=dep_scope
+            )
+        return ResolvedDependencies(instances)
 
     async def _resolve_single(
         self,
         call: Callable[..., Any],
         *,
+        active_scope: "ResolutionScope | None",
+        dep_scope: DependencyScope,
         cache: bool = True,
+        use_cache: bool = True,
     ) -> Any:
         """Recursively resolve a single dependency and all its sub-dependencies.
 
-        *cache* controls only the caching of *call* itself (its
-        sub-dependencies are always resolved through the container's cache);
-        :meth:`invoke` passes ``cache=False`` to treat *call* as an entry point.
+        *dep_scope* is the resolved scope of *call*; *cache* controls whether
+        *call* itself is cached (``invoke`` passes ``False`` for the entry
+        point); *use_cache* mirrors FastAPI's per-dependency caching flag.
         """
-        if cache and call in self._instance_cache:
-            return self._instance_cache[call]
+        instances, exit_stack = self._target(active_scope, dep_scope, call)
+
+        if cache and use_cache and call in instances:
+            return instances[call]
 
         # Apply overrides: if the original callable has an override, use it instead.
         effective_call = self._apply_overrides(call)
@@ -303,11 +425,32 @@ class FastAPIContainer:
         # Resolve sub-dependencies first.
         sub_values: dict[str, Any] = {}
         for sub_dep in dependant.dependencies:
-            sub_call = cast("Callable[..., Any]", sub_dep.call)
+            original = cast("Callable[..., Any]", sub_dep.call)
             # Resolve the RegistrableDependency indirection that Depends may apply
             # at the Dependant level.
-            sub_call = _resolve_callable(sub_call)
-            sub_instance = await self._resolve_single(sub_call)
+            sub_call = _resolve_callable(original)
+            sub_scope = self._scope_of(
+                original, sub_call, getattr(sub_dep, "scope", None)
+            )
+            if (
+                dep_scope is DependencyScope.CONTAINER
+                and cache
+                and use_cache
+                and sub_scope is DependencyScope.SCOPED
+            ):
+                parent = getattr(call, "__qualname__", repr(call))
+                child = getattr(sub_call, "__qualname__", repr(sub_call))
+                raise ScopeError(
+                    f"CONTAINER-scoped {parent} cannot depend on SCOPED {child}: "
+                    "the container would capture a dependency torn down at scope "
+                    "close (captive dependency). Make the dependent SCOPED too."
+                )
+            sub_instance = await self._resolve_single(
+                sub_call,
+                active_scope=active_scope,
+                dep_scope=sub_scope,
+                use_cache=getattr(sub_dep, "use_cache", True),
+            )
             if sub_dep.name is not None:
                 sub_values[sub_dep.name] = sub_instance
 
@@ -343,25 +486,87 @@ class FastAPIContainer:
         async_gen = is_async_gen_callable(effective_call)
         sync_gen = is_gen_callable(effective_call)
 
-        # Invoke the callable itself.
+        # Invoke the callable itself. Generators are entered on the scope's exit
+        # stack so their teardown runs when that scope closes (the container for
+        # CONTAINER, the resolution scope for SCOPED).
         if async_gen:
             cm = asynccontextmanager(effective_call)(**sub_values)
-            instance = await self._exit_stack.enter_async_context(cm)
+            instance = await exit_stack.enter_async_context(cm)
         elif sync_gen:
             cm = contextmanager_in_threadpool(
                 contextmanager(effective_call)(**sub_values)
             )
-            instance = await self._exit_stack.enter_async_context(cm)
+            instance = await exit_stack.enter_async_context(cm)
         elif is_coroutine_callable(effective_call):
             instance = await effective_call(**sub_values)
         else:
             instance = await run_in_threadpool(effective_call, **sub_values)
 
-        # Only cache non-generator dependencies at container level — generators
-        # are tied to the exit_stack lifecycle of the container.
-        if cache and not (async_gen or sync_gen):
-            self._instance_cache[call] = instance
+        # Cache the instance (including generators) when sharing is enabled;
+        # ``use_cache=False`` yields a fresh instance per consumer while its
+        # teardown stays owned by the chosen exit stack.
+        if cache and use_cache:
+            instances[call] = instance
         return instance
+
+
+class ResolutionScope:
+    """A short-lived resolution scope owning ``SCOPED`` dependency lifetimes.
+
+    Obtained from :meth:`FastAPIContainer.scope` and used as an async context
+    manager. ``SCOPED`` dependencies resolved through it are torn down when the
+    block exits; ``CONTAINER`` dependencies are delegated to the parent
+    container and outlive the scope.
+    """
+
+    __slots__ = ("_container", "_scope_instances", "_scope_stack")
+
+    def __init__(self, container: FastAPIContainer) -> None:
+        self._container = container
+        self._scope_instances: dict[Callable[..., Any], Any] = {}
+        self._scope_stack = AsyncExitStack()
+
+    async def __aenter__(self) -> "ResolutionScope":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self._scope_stack.aclose()
+
+    @overload
+    async def get[T](self, dependency: type[T]) -> T: ...
+
+    @overload
+    async def get[T](self, dependency: Callable[..., T]) -> T: ...
+
+    async def get(self, dependency: Callable[..., Any]) -> Any:
+        """Resolve a single dependency within this scope."""
+        deps = await self.resolve(dependency)
+        return deps.get(dependency)
+
+    @overload
+    async def optional[T](self, dependency: type[T]) -> T | None: ...
+
+    @overload
+    async def optional[T](self, dependency: Callable[..., T]) -> T | None: ...
+
+    async def optional(self, dependency: Callable[..., Any]) -> Any | None:
+        """Resolve a single dependency within this scope, or ``None``."""
+        deps = await self.resolve(dependency)
+        return deps.optional(dependency)
+
+    async def resolve(
+        self,
+        *dependencies: Callable[..., Any],
+    ) -> ResolvedDependencies:
+        """Resolve one or more dependencies within this scope."""
+        return await self._container._resolve_many(dependencies, active_scope=self)
+
+    async def invoke(self, call: Callable[..., Any]) -> Any:
+        """Resolve *call*'s dependencies within this scope and invoke it."""
+        dep_scope = self._container._scope_of(call, call, None)
+        return await self._container._resolve_single(
+            call, active_scope=self, dep_scope=dep_scope, cache=False
+        )
 
 
 def get_container(
