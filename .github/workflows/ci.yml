@@ -76,7 +76,11 @@ jobs:
         run: uv pip install "fastapi==${{ matrix.fastapi-version }}"
 
       - name: Test
-        run: uv run --no-sync pytest
+        # The README examples are a documentation-quality check against the
+        # current, fully-typed FastAPI (covered by the Python-version matrix).
+        # Old floor versions predate explicit type re-exports, so mypy --strict
+        # rejects them — irrelevant to runtime compatibility.
+        run: uv run --no-sync pytest --ignore=tests/test_readme.py
 
   pre-commit:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
