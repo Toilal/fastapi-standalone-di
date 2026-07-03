@@ -405,7 +405,15 @@ declaring `response: Response` receives a fresh stub whose header/cookie/status
 mutations are accepted but have no transport effect (nothing sends it). A
 dependency declaring `background_tasks: BackgroundTasks` receives a real
 `BackgroundTasks`; tasks added with `add_task(...)` run when the owning scope
-closes (`aclose()` for `CONTAINER`, scope exit for `SCOPED`).
+closes (`aclose()` for `CONTAINER`, scope exit for `SCOPED`). A dependency
+declaring `scopes: SecurityScopes` receives a `SecurityScopes` instance so it
+can be resolved standalone; its `.scopes` reflect only what the callable itself
+declares, since each callable is re-introspected on its own — the cumulative
+OAuth2 scopes a parent grants through `Security(dep, scopes=[...])` are not
+propagated. Authentication is not enforced (there is no transport): a security
+scheme such as `OAuth2PasswordBearer` still runs as an ordinary dependency and
+reads the stub `Request`, so supply an `Authorization` header via
+`headers={...}` if you want it to succeed.
 
 ## Requirements
 

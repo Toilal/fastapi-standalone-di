@@ -51,6 +51,7 @@ from fastapi import BackgroundTasks, Depends, Response
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
+from fastapi.security import SecurityScopes
 from starlette.datastructures import State
 from starlette.requests import Request
 
@@ -789,6 +790,27 @@ class FastAPIContainer:
             background_tasks = BackgroundTasks()
             sub_values[bg_param_name] = background_tasks
             exit_stack.push_async_callback(background_tasks)
+
+        # A dependency (typically a security dependency) may declare
+        # ``scopes: SecurityScopes``. FastAPI fills it from the OAuth2 scopes
+        # accumulated along the dependency chain; standalone, each callable is
+        # re-introspected on its own, so the injected scopes reflect only what
+        # the callable itself declares (the scope-carrying attribute is
+        # ``oauth_scopes`` on recent FastAPI, ``security_scopes`` on older
+        # releases). Cumulative parent scopes are not propagated.
+        security_scopes_param_name = getattr(
+            dependant, "security_scopes_param_name", None
+        )
+        if (
+            security_scopes_param_name is not None
+            and security_scopes_param_name not in sub_values
+        ):
+            scopes = (
+                getattr(dependant, "oauth_scopes", None)
+                or getattr(dependant, "security_scopes", None)
+                or []
+            )
+            sub_values[security_scopes_param_name] = SecurityScopes(scopes=list(scopes))
 
         for source_name, param_fields, config in (
             ("header", dependant.header_params, self._headers),
