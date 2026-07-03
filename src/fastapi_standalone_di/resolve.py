@@ -251,37 +251,22 @@ class DependantCache:
     several containers.
     """
 
-    __slots__ = ("_keepalive", "dependants")
+    __slots__ = ("dependants",)
 
     def __init__(self) -> None:
-        # Keyed by ``id(call)``.
-        self.dependants: dict[int, Dependant] = {}
-        # Strong refs to every object whose ``id()`` is used as a cache key.
-        # Python recycles ``id()`` (memory addresses) after an object is GC'd,
-        # so without this a short-lived callable could be collected and a later
-        # function allocated at the same address, then wrongly served the dead
-        # object's cached dependant. Holding a reference keeps the address
-        # reserved for the cache's lifetime.
-        self._keepalive: dict[int, object] = {}
-
-    def keep_alive(self, *objs: object) -> None:
-        """Pin objects so their ``id()`` stays reserved while cached."""
-        for obj in objs:
-            self._keepalive[id(obj)] = obj
+        self.dependants: dict[Callable[..., Any], Dependant] = {}
 
     def get_dependant(self, call: Callable[..., Any]) -> Dependant | None:
         """Look up a cached ``Dependant`` by callable."""
-        return self.dependants.get(id(call))
+        return self.dependants.get(call)
 
     def set_dependant(self, call: Callable[..., Any], dependant: Dependant) -> None:
         """Store a ``Dependant`` keyed by callable."""
-        self.dependants[id(call)] = dependant
-        self._keepalive[id(call)] = call
+        self.dependants[call] = dependant
 
     def clear(self) -> None:
         """Drop all cached entries."""
         self.dependants.clear()
-        self._keepalive.clear()
 
 
 class ResolvedDependencies:

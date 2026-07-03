@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from fastapi import BackgroundTasks, Depends, Response
+from fastapi.dependencies.utils import get_dependant
 
 from fastapi_standalone_di import (
     DependantCache,
@@ -213,6 +214,43 @@ class TestDependantCache:
         assert leaf.value() == "leaf"
 
         assert cache.get_dependant(LeafDep) is not None
+
+    def test_keyed_by_callable(self) -> None:
+        """The cache is keyed by the callable itself, not by its id()."""
+
+        def call() -> None: ...
+
+        cache = DependantCache()
+        dependant = get_dependant(path="", call=call)
+        cache.set_dependant(call, dependant)
+
+        assert cache.get_dependant(call) is dependant
+        assert call in cache.dependants
+
+    def test_distinct_callables_get_distinct_entries(self) -> None:
+        """Two different callables never collide in the cache."""
+
+        def first() -> None: ...
+
+        def second() -> None: ...
+
+        cache = DependantCache()
+        cache.set_dependant(first, get_dependant(path="", call=first))
+        cache.set_dependant(second, get_dependant(path="", call=second))
+
+        assert cache.get_dependant(first) is not cache.get_dependant(second)
+        assert len(cache.dependants) == 2
+
+    def test_repeated_set_same_callable_stays_bounded(self) -> None:
+        """Re-introspecting the same callable does not grow the cache."""
+
+        def call() -> None: ...
+
+        cache = DependantCache()
+        for _ in range(100):
+            cache.set_dependant(call, get_dependant(path="", call=call))
+
+        assert len(cache.dependants) == 1
 
 
 class TestContainerGetAndOptional:
