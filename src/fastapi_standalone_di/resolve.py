@@ -38,8 +38,9 @@ fresh at each injection point (``False``).
 """
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast, overload
 
@@ -92,6 +93,99 @@ Scopes = dict[Callable[..., Any], DependencyScope]
 
 class ScopeError(RuntimeError):
     """Raised on a scope misuse (e.g. resolving a SCOPED dependency without a scope)."""
+
+
+# Sentinels a "required" (no usable default) field carries as ``field_info.default``,
+# collected across the supported pydantic range (v2 ``PydanticUndefined``, v1
+# ``Undefined``, plus the bare ``...`` some code paths use).
+_REQUIRED_SENTINELS: tuple[Any, ...] = (Ellipsis,)
+try:
+    from pydantic_core import PydanticUndefined as _PydanticUndefinedV2
+
+    _REQUIRED_SENTINELS += (_PydanticUndefinedV2,)
+except ImportError:  # pragma: no cover - pydantic v1
+    pass
+try:
+    from pydantic.fields import Undefined as _UndefinedV1  # type: ignore[attr-defined]
+
+    _REQUIRED_SENTINELS += (_UndefinedV1,)
+except ImportError:  # pragma: no cover - pydantic v2
+    pass
+
+
+@dataclass(frozen=True)
+class ParamSource:
+    """How to supply one class of connection parameters (query/path/header/cookie).
+
+    Outside ASGI these values don't arrive over the wire, so the container has to
+    produce them. Both channels carry **strings**, exactly as HTTP would, and are
+    coerced to each parameter's declared type by FastAPI's own field validation.
+
+    Attributes
+    ----------
+    values:
+        Explicit values keyed by parameter name (falling back to its alias).
+    default:
+        A string injected for any **required** parameter of this source that has
+        no explicit value and no declared default. Left as ``None``, such a
+        parameter raises :class:`MissingParameterError` instead.
+    """
+
+    values: Mapping[str, str] = field(default_factory=dict)
+    default: str | None = None
+
+
+# A source argument accepts either a bare ``{name: value}`` mapping (values only)
+# or a full :class:`ParamSource`.
+ParamSourceArg = ParamSource | Mapping[str, str]
+
+
+class ParameterError(RuntimeError):
+    """Base class for standalone connection-parameter resolution errors."""
+
+
+class MissingParameterError(ParameterError):
+    """A required query/path/header/cookie parameter could not be supplied."""
+
+    def __init__(self, source: str, name: str, call: Callable[..., Any]) -> None:
+        self.source = source
+        self.name = name
+        target = getattr(call, "__qualname__", repr(call))
+        super().__init__(
+            f"Required {source} parameter {name!r} of {target} has no value in a "
+            f"standalone context. Provide it via {source}={{{name!r}: ...}}, set a "
+            f"{source} default, or make the parameter optional."
+        )
+
+
+class ParameterValidationError(ParameterError):
+    """A supplied parameter value is incompatible with its declared type."""
+
+    def __init__(
+        self,
+        source: str,
+        name: str,
+        value: object,
+        errors: object,
+        call: Callable[..., Any],
+    ) -> None:
+        self.source = source
+        self.name = name
+        self.errors = errors
+        target = getattr(call, "__qualname__", repr(call))
+        super().__init__(
+            f"{source.capitalize()} parameter {name!r} of {target} got an invalid "
+            f"value {value!r}: {errors}"
+        )
+
+
+def _as_param_source(arg: ParamSourceArg | None) -> ParamSource:
+    """Normalise a source argument to a :class:`ParamSource`."""
+    if arg is None:
+        return ParamSource()
+    if isinstance(arg, ParamSource):
+        return arg
+    return ParamSource(values=arg)
 
 
 class DependantCache:
@@ -200,8 +294,9 @@ class FastAPIContainer:
     """Dependency container that resolves FastAPI dependencies outside ASGI.
 
     Encapsulates the configuration needed to resolve a dependency tree:
-    application state, dependency overrides, introspection cache, and the
-    :class:`DependencyScope` policy.
+    application state, dependency overrides, introspection cache, the
+    :class:`DependencyScope` policy, and the query/path/header/cookie parameter
+    values to supply outside ASGI (see :class:`ParamSource`).
 
     Example::
 
@@ -225,9 +320,17 @@ class FastAPIContainer:
         dependant_cache: DependantCache | bool = True,
         default_scope: DefaultScope = DependencyScope.CONTAINER,
         scopes: Scopes | None = None,
+        query: ParamSourceArg | None = None,
+        path: ParamSourceArg | None = None,
+        headers: ParamSourceArg | None = None,
+        cookies: ParamSourceArg | None = None,
     ) -> None:
         self._app_state = app_state if app_state is not None else AppState.standalone()
         self._dependency_overrides = dependency_overrides or {}
+        self._query = _as_param_source(query)
+        self._path = _as_param_source(path)
+        self._headers = _as_param_source(headers)
+        self._cookies = _as_param_source(cookies)
 
         dc: DependantCache | None
         if isinstance(dependant_cache, DependantCache):
@@ -337,6 +440,50 @@ class FastAPIContainer:
     def _apply_overrides(self, call: Callable[..., Any]) -> Callable[..., Any]:
         """Apply dependency overrides, returning the substitute if one exists."""
         return self._dependency_overrides.get(call, call)
+
+    def _resolve_param(
+        self,
+        source: str,
+        param_field: Any,
+        config: ParamSource,
+        call: Callable[..., Any],
+    ) -> Any:
+        """Produce a value for one query/path/header/cookie parameter.
+
+        Precedence: an explicit value (by name, then alias) → the parameter's own
+        declared default → the source-wide ``default`` string → a
+        :class:`MissingParameterError` for a required parameter left unsupplied.
+        Supplied strings are coerced to the declared type by FastAPI's field
+        validation, so an incompatible value raises
+        :class:`ParameterValidationError` rather than reaching the callable.
+        """
+        for key in (param_field.name, param_field.alias):
+            if key in config.values:
+                return self._coerce_param(source, param_field, config.values[key], call)
+
+        field_info = param_field.field_info
+        if getattr(field_info, "default_factory", None) is not None:
+            return field_info.default_factory()
+        if not any(field_info.default is sentinel for sentinel in _REQUIRED_SENTINELS):
+            return field_info.default
+
+        if config.default is not None:
+            return self._coerce_param(source, param_field, config.default, call)
+
+        raise MissingParameterError(source, param_field.name, call)
+
+    @staticmethod
+    def _coerce_param(
+        source: str,
+        param_field: Any,
+        raw: str,
+        call: Callable[..., Any],
+    ) -> Any:
+        """Coerce a raw string to the parameter's declared type via FastAPI."""
+        value, errors = param_field.validate(raw, {}, loc=(source, param_field.alias))
+        if errors:
+            raise ParameterValidationError(source, param_field.name, raw, errors, call)
+        return value
 
     def _scope_of(
         self,
@@ -495,14 +642,18 @@ class FastAPIContainer:
             sub_values[bg_param_name] = background_tasks
             exit_stack.push_async_callback(background_tasks)
 
-        for param_field in (
-            *dependant.header_params,
-            *dependant.query_params,
-            *dependant.path_params,
-            *dependant.cookie_params,
+        for source_name, param_fields, config in (
+            ("header", dependant.header_params, self._headers),
+            ("query", dependant.query_params, self._query),
+            ("path", dependant.path_params, self._path),
+            ("cookie", dependant.cookie_params, self._cookies),
         ):
-            if param_field.name not in sub_values:
-                sub_values[param_field.name] = param_field.field_info.default
+            for param_field in param_fields:
+                if param_field.name in sub_values:
+                    continue
+                sub_values[param_field.name] = self._resolve_param(
+                    source_name, param_field, config, effective_call
+                )
 
         # Determine the callable's execution model from the call itself rather
         # than from ``Dependant`` attributes: the ``is_*_callable`` flags only
