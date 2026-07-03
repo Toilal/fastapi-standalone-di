@@ -42,6 +42,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
+from http.cookies import SimpleCookie
 from typing import Any, cast, overload
 from urllib.parse import urlencode
 
@@ -93,10 +94,18 @@ def _build_stub_request(
     ``.query_params``, ``.path_params``, ``.cookies``, ``.client`` and
     ``await request.body()`` all work; query/path/cookie values mirror the
     container's per-source configuration.
+
+    Cookie values are serialised with :class:`http.cookies.SimpleCookie`, so
+    special characters (``;``, ``=``, spaces) are escaped and round-trip through
+    ``request.cookies``. HTTP headers are latin-1 only, so a cookie value that is
+    not latin-1 encodable (e.g. an emoji) raises :class:`UnicodeEncodeError`.
     """
     headers: list[tuple[bytes, bytes]] = []
     if cookies:
-        cookie_header = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        jar: SimpleCookie = SimpleCookie()
+        for name, value in cookies.items():
+            jar[name] = value
+        cookie_header = "; ".join(morsel.OutputString() for morsel in jar.values())
         headers.append((b"cookie", cookie_header.encode("latin-1")))
     scope = {
         "type": "http",
