@@ -81,21 +81,43 @@ class TestRequestMode:
         state = AppState.from_app(app)
         assert state.get("db") == "from-app"
 
-    def test_set_syncs_to_standalone(self) -> None:
+    def test_set_writes_to_app_state_only(self) -> None:
         app = FastAPI()
         state = AppState.from_app(app)
         state.set("db", "value")
 
         assert app.state.db == "value"
-        assert AppState.standalone().get("db") == "value"
 
-    def test_delete_syncs_to_standalone(self) -> None:
+    def test_set_does_not_leak_to_standalone(self) -> None:
+        app = FastAPI()
+        AppState.from_app(app).set("db", "value")
+
+        assert AppState.standalone().get("db") is None
+
+    def test_delete_removes_from_app_state(self) -> None:
         app = FastAPI()
         state = AppState.from_app(app)
         state.set("db", "value")
         state.delete("db")
 
-        assert AppState.standalone().get("db") is None
+        assert state.get("db") is None
+
+    def test_delete_does_not_touch_standalone(self) -> None:
+        set_app_state_value("db", "global")
+        app = FastAPI()
+        state = AppState.from_app(app)
+        state.set("db", "request")
+        state.delete("db")
+
+        assert AppState.standalone().get("db") == "global"
+
+    def test_two_apps_are_isolated(self) -> None:
+        app_a, app_b = FastAPI(), FastAPI()
+        AppState.from_app(app_a).set("db", "a")
+        AppState.from_app(app_b).set("db", "b")
+
+        assert AppState.from_app(app_a).get("db") == "a"
+        assert AppState.from_app(app_b).get("db") == "b"
 
 
 class TestGetAppStateDependency:
