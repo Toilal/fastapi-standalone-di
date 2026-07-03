@@ -138,3 +138,21 @@ class TestGetAppStateDependency:
 
         container = FastAPIContainer()
         assert await container.get(get_db) == "resolved"
+
+    async def test_dependency_override_is_honoured(self) -> None:
+        set_app_state_value("db", "seeded")
+        overridden = AppState()
+        overridden.set("db", "overridden")
+
+        container = FastAPIContainer(
+            dependency_overrides={get_app_state: lambda: overridden},
+        )
+        assert await container.get(get_app_state) is overridden
+
+    async def test_dependency_override_survives_clear_cache(self) -> None:
+        overridden = AppState()
+        container = FastAPIContainer(
+            dependency_overrides={get_app_state: lambda: overridden},
+        )
+        container.clear_cache()
+        assert await container.get(get_app_state) is overridden
