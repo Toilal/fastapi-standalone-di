@@ -126,6 +126,26 @@ def _build_stub_request(
     return Request(scope, receive=_empty_receive)
 
 
+class _LazyRequest:
+    """Memoised stub-``Request`` factory shared across one resolution operation.
+
+    The stub is built on the first :meth:`get` — i.e. the first dependency that
+    declares a ``Request``/``HTTPConnection`` param — and reused for the rest of
+    the operation. A tree with no such param never builds one.
+    """
+
+    __slots__ = ("_build", "_request")
+
+    def __init__(self, build: Callable[[], Request]) -> None:
+        self._build = build
+        self._request: Request | None = None
+
+    def get(self) -> Request:
+        if self._request is None:
+            self._request = self._build()
+        return self._request
+
+
 DependencyOverrides = dict[Callable[..., Any], Callable[..., Any]]
 
 
@@ -606,7 +626,7 @@ class FastAPIContainer:
         active_scope: "ResolutionScope | None",
     ) -> ResolvedDependencies:
         instances: dict[Callable[..., Any], Any] = {}
-        request = self._build_request()
+        request = _LazyRequest(self._build_request)
         for dep in dependencies:
             resolved = _resolve_callable(dep)
             dep_scope = self._scope_of(dep, resolved, None)
@@ -626,18 +646,19 @@ class FastAPIContainer:
         dep_scope: DependencyScope,
         cache: bool = True,
         use_cache: bool = True,
-        request: Request | None = None,
+        request: _LazyRequest | None = None,
     ) -> Any:
         """Recursively resolve a single dependency and all its sub-dependencies.
 
         *dep_scope* is the resolved scope of *call*; *cache* controls whether
         *call* itself is cached (``invoke`` passes ``False`` for the entry
         point); *use_cache* mirrors FastAPI's per-dependency caching flag.
-        *request* is the stub connection shared across this resolution
-        operation; the top-level call builds it when none is threaded in.
+        *request* is the memoised stub-connection factory shared across this
+        resolution operation; the top-level call creates it when none is
+        threaded in, and no stub is built unless a dependency needs one.
         """
         if request is None:
-            request = self._build_request()
+            request = _LazyRequest(self._build_request)
         instances, exit_stack, locks = self._target(active_scope, dep_scope, call)
 
         shared = cache and use_cache
@@ -683,7 +704,7 @@ class FastAPIContainer:
         dep_scope: DependencyScope,
         cache: bool,
         use_cache: bool,
-        request: Request,
+        request: _LazyRequest,
         exit_stack: AsyncExitStack,
     ) -> Any:
         """Build *call*'s instance, resolving sub-dependencies and injecting stub
@@ -749,7 +770,7 @@ class FastAPIContainer:
             param = sig_params.get(conn_param)
             if param is not None and param.default is None:
                 continue
-            sub_values[conn_param] = request
+            sub_values[conn_param] = request.get()
 
         # A dependency may declare ``response: Response`` (to set headers/cookies/
         # status) or ``background_tasks: BackgroundTasks``. FastAPI records the
