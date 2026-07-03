@@ -265,7 +265,8 @@ there is no live connection, so the container injects a **stub `Request`** built
 per resolution operation — one `get`/`invoke`/`resolve` call — and shared across
 that call's whole dependency tree, exactly as a real request is shared by all
 dependencies of one HTTP request. Separate operations get separate requests, so
-nothing leaks between them.
+nothing leaks between them. The stub is built lazily, only when a dependency
+actually declares such a parameter: a tree without one builds no request at all.
 
 ```python
 from fastapi import Request

@@ -131,3 +131,52 @@ class TestSharingAndIsolation:
         await container.invoke(capture)
         await container.invoke(capture)
         assert seen[0] is not seen[1]
+
+
+class TestLazyBuild:
+    """The stub Request is built lazily: only when a dependency needs one."""
+
+    @staticmethod
+    def _count_builds(monkeypatch: pytest.MonkeyPatch) -> "list[int]":
+        import fastapi_standalone_di.resolve as resolve_mod
+
+        builds = [0]
+        real = resolve_mod._build_stub_request
+
+        def counting(**kwargs: object) -> Request:
+            builds[0] += 1
+            return real(**kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(resolve_mod, "_build_stub_request", counting)
+        return builds
+
+    async def test_no_connection_param_builds_no_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        builds = self._count_builds(monkeypatch)
+
+        def leaf() -> str:
+            return "leaf"
+
+        def root(value: str = Depends(leaf)) -> str:
+            return value
+
+        assert await FastAPIContainer().invoke(root) == "leaf"
+        assert builds[0] == 0
+
+    async def test_connection_param_builds_one_shared_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        builds = self._count_builds(monkeypatch)
+        seen: list[Request] = []
+
+        def writer(request: Request) -> None:
+            seen.append(request)
+
+        def reader(request: Request, _: None = Depends(writer)) -> None:
+            seen.append(request)
+
+        await FastAPIContainer().invoke(reader)
+        assert builds[0] == 1
+        assert len(seen) == 2
+        assert seen[0] is seen[1]
