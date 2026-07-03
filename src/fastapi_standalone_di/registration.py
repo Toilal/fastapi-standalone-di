@@ -33,7 +33,7 @@ class RegistrableDependency:
     _impl: Callable[..., Any] | None = None
 
     @classproperty
-    def impl(cls) -> Callable[..., Any] | None:
+    def impl(cls) -> Callable[..., Any]:
         return cls.dependency()
 
     @classmethod
@@ -42,8 +42,12 @@ class RegistrableDependency:
         cls._impl = impl
 
     @classmethod
-    def dependency(cls) -> Callable[..., Any] | None:
-        """Entry point for ``fastapi.Depends``: return the registered implementation."""
+    def dependency(cls) -> Callable[..., Any]:
+        """Entry point for ``fastapi.Depends``: return the registered implementation.
+
+        Raises :class:`RuntimeError` when no implementation is registered — it
+        never returns ``None``.
+        """
         if cls._impl is None:
             raise RuntimeError(
                 f"No implementation registered for {cls.__module__}.{cls.__name__}"

@@ -323,12 +323,7 @@ class ResolvedDependencies:
 def _resolve_callable(dep: Callable[..., Any]) -> Callable[..., Any]:
     """If *dep* is a ``RegistrableDependency``, return its registered impl."""
     if inspect.isclass(dep) and issubclass(dep, RegistrableDependency):
-        impl = dep.dependency()
-        if impl is None:  # pragma: no cover
-            raise RuntimeError(
-                f"No implementation registered for {dep.__module__}.{dep.__qualname__}"
-            )
-        return impl
+        return dep.dependency()
     return dep
 
 
