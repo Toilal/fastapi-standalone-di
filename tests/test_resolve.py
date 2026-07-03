@@ -1,5 +1,6 @@
 """Tests for fastapi_standalone_di.resolve."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 
@@ -449,3 +450,61 @@ class TestBackgroundTasksInjection:
             await scope.get(_dep_with_background_tasks)
             assert _background_ran == []
         assert _background_ran == ["done"]
+
+
+# --- concurrency-safe resolution -------------------------------------------
+
+_slow_starts = 0
+_slow_teardowns = 0
+
+
+class SlowSingleton:
+    pass
+
+
+async def _slow_singleton_factory() -> AsyncIterator[SlowSingleton]:
+    """Yield-based dependency that yields control mid-construction.
+
+    The ``await`` between incrementing the start counter and yielding forces
+    two gathered resolutions to interleave on a cache miss — the exact window
+    the resolution lock must close.
+    """
+    global _slow_starts, _slow_teardowns
+    _slow_starts += 1
+    await asyncio.sleep(0)
+    yield SlowSingleton()
+    _slow_teardowns += 1
+
+
+class TestConcurrentResolution:
+    async def test_concurrent_get_of_same_dependency_yields_one_instance(
+        self,
+    ) -> None:
+        """Racing get() of the same CONTAINER dependency shares one instance."""
+        global _slow_starts, _slow_teardowns
+        _slow_starts = 0
+        _slow_teardowns = 0
+
+        container = FastAPIContainer()
+        a, b, c = await asyncio.gather(
+            container.get(_slow_singleton_factory),  # type: ignore[arg-type]
+            container.get(_slow_singleton_factory),  # type: ignore[arg-type]
+            container.get(_slow_singleton_factory),  # type: ignore[arg-type]
+        )
+
+        assert a is b is c
+        assert _slow_starts == 1
+
+    async def test_concurrent_get_leaves_teardown_intact(self) -> None:
+        """The shared instance registers a single teardown on the exit stack."""
+        global _slow_starts, _slow_teardowns
+        _slow_starts = 0
+        _slow_teardowns = 0
+
+        async with FastAPIContainer() as container:
+            await asyncio.gather(
+                container.get(_slow_singleton_factory),  # type: ignore[arg-type]
+                container.get(_slow_singleton_factory),  # type: ignore[arg-type]
+            )
+            assert _slow_teardowns == 0
+        assert _slow_teardowns == 1
