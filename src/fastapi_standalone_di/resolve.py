@@ -37,6 +37,7 @@ is shared between consumers within a scope (``True``, the default) or created
 fresh at each injection point (``False``).
 """
 
+import asyncio
 import inspect
 from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
@@ -383,6 +384,7 @@ class FastAPIContainer:
         self._container_instances: dict[Callable[..., Any], Any] = {}
         self._seed_container_instances()
         self._container_stack = AsyncExitStack()
+        self._container_locks: dict[Callable[..., Any], asyncio.Lock] = {}
 
     def _seed_container_instances(self) -> None:
         """Pre-populate the ``get_app_state`` instance unless it is overridden.
@@ -402,6 +404,7 @@ class FastAPIContainer:
         closing generator dependencies still happens at :meth:`aclose`.
         """
         self._container_instances.clear()
+        self._container_locks.clear()
         self._seed_container_instances()
 
     def scope(self) -> "ResolutionScope":
@@ -571,10 +574,18 @@ class FastAPIContainer:
         active_scope: "ResolutionScope | None",
         dep_scope: DependencyScope,
         call: Callable[..., Any],
-    ) -> tuple[dict[Callable[..., Any], Any], AsyncExitStack]:
-        """Return the (instance cache, exit stack) a dependency of *dep_scope* uses."""
+    ) -> tuple[
+        dict[Callable[..., Any], Any],
+        AsyncExitStack,
+        dict[Callable[..., Any], asyncio.Lock],
+    ]:
+        """Return the (instance cache, exit stack, locks) a *dep_scope* dep uses."""
         if dep_scope is DependencyScope.CONTAINER:
-            return self._container_instances, self._container_stack
+            return (
+                self._container_instances,
+                self._container_stack,
+                self._container_locks,
+            )
         if active_scope is None:
             name = getattr(call, "__qualname__", repr(call))
             raise ScopeError(
@@ -582,7 +593,11 @@ class FastAPIContainer:
                 "Open one with `async with container.scope() as scope: "
                 "await scope.get(...)`, or use `container.invoke(...)`."
             )
-        return active_scope._scope_instances, active_scope._scope_stack
+        return (
+            active_scope._scope_instances,
+            active_scope._scope_stack,
+            active_scope._scope_locks,
+        )
 
     async def _resolve_many(
         self,
@@ -623,11 +638,59 @@ class FastAPIContainer:
         """
         if request is None:
             request = self._build_request()
-        instances, exit_stack = self._target(active_scope, dep_scope, call)
+        instances, exit_stack, locks = self._target(active_scope, dep_scope, call)
 
-        if cache and use_cache and call in instances:
+        shared = cache and use_cache
+        if shared and call in instances:
             return instances[call]
 
+        if not shared:
+            return await self._instantiate(
+                call,
+                active_scope=active_scope,
+                dep_scope=dep_scope,
+                cache=cache,
+                use_cache=use_cache,
+                request=request,
+                exit_stack=exit_stack,
+            )
+
+        # Serialise concurrent resolutions of the same shared dependency: without
+        # this, two ``get``/``invoke`` racing on a cache miss would both build an
+        # instance and both enter the shared exit stack, leaking a duplicate and
+        # its teardown. Double-check the cache after acquiring the lock.
+        lock = locks.setdefault(call, asyncio.Lock())
+        async with lock:
+            if call in instances:
+                return instances[call]
+            instance = await self._instantiate(
+                call,
+                active_scope=active_scope,
+                dep_scope=dep_scope,
+                cache=cache,
+                use_cache=use_cache,
+                request=request,
+                exit_stack=exit_stack,
+            )
+            instances[call] = instance
+            return instance
+
+    async def _instantiate(
+        self,
+        call: Callable[..., Any],
+        *,
+        active_scope: "ResolutionScope | None",
+        dep_scope: DependencyScope,
+        cache: bool,
+        use_cache: bool,
+        request: Request,
+        exit_stack: AsyncExitStack,
+    ) -> Any:
+        """Build *call*'s instance, resolving sub-dependencies and injecting stub
+        request/response/param values; teardown is registered on *exit_stack*.
+
+        Always constructs a fresh instance — caching is the caller's concern.
+        """
         # Apply overrides: if the original callable has an override, use it instead.
         effective_call = self._apply_overrides(call)
 
@@ -742,11 +805,6 @@ class FastAPIContainer:
         else:
             instance = await run_in_threadpool(effective_call, **sub_values)
 
-        # Cache the instance (including generators) when sharing is enabled;
-        # ``use_cache=False`` yields a fresh instance per consumer while its
-        # teardown stays owned by the chosen exit stack.
-        if cache and use_cache:
-            instances[call] = instance
         return instance
 
 
@@ -759,12 +817,13 @@ class ResolutionScope:
     container and outlive the scope.
     """
 
-    __slots__ = ("_container", "_scope_instances", "_scope_stack")
+    __slots__ = ("_container", "_scope_instances", "_scope_locks", "_scope_stack")
 
     def __init__(self, container: FastAPIContainer) -> None:
         self._container = container
         self._scope_instances: dict[Callable[..., Any], Any] = {}
         self._scope_stack = AsyncExitStack()
+        self._scope_locks: dict[Callable[..., Any], asyncio.Lock] = {}
 
     async def __aenter__(self) -> "ResolutionScope":
         return self

@@ -76,6 +76,16 @@ opts that dependency out: it is rebuilt fresh at each injection point, while its
 `yield` teardown still runs on its scope's exit stack. `await container.aclose()`
 closes the container and runs any `yield` teardown.
 
+### Concurrency
+
+Resolution is concurrency-safe: several `get`/`resolve`/`invoke` calls may run
+concurrently on the same container (e.g. under `asyncio.gather`). Concurrent
+resolutions of the same shared dependency are serialised, so a cache miss still
+yields a single instance registered once on its exit stack — no duplicate
+instance and no double teardown. Independent dependencies are not serialised
+against each other; the lock only guards same-key construction, not parallel
+throughput.
+
 ### `yield` dependencies and teardown
 
 Generator dependencies (sync or async) are supported. Their teardown runs when the
