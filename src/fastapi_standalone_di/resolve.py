@@ -395,20 +395,29 @@ class FastAPIContainer:
         self._default_scope = default_scope
         self._scopes = scopes or {}
 
-        self._container_instances: dict[Callable[..., Any], Any] = {
-            get_app_state: self._app_state,
-        }
+        self._container_instances: dict[Callable[..., Any], Any] = {}
+        self._seed_container_instances()
         self._container_stack = AsyncExitStack()
+
+    def _seed_container_instances(self) -> None:
+        """Pre-populate the ``get_app_state`` instance unless it is overridden.
+
+        Seeding lets ``get_app_state`` resolve without a live request. An
+        override for it takes precedence: leaving the key unseeded lets
+        :meth:`_resolve_single` route through :meth:`_apply_overrides`.
+        """
+        if get_app_state not in self._dependency_overrides:
+            self._container_instances[get_app_state] = self._app_state
 
     def clear_cache(self) -> None:
         """Drop all cached container-scoped instances.
 
-        The ``get_app_state`` seed is preserved so subsequent :meth:`resolve`
-        calls still work. Does not run teardown — closing generator
-        dependencies still happens at :meth:`aclose`.
+        The ``get_app_state`` seed is restored (unless overridden) so
+        subsequent :meth:`resolve` calls still work. Does not run teardown —
+        closing generator dependencies still happens at :meth:`aclose`.
         """
         self._container_instances.clear()
-        self._container_instances[get_app_state] = self._app_state
+        self._seed_container_instances()
 
     def scope(self) -> "ResolutionScope":
         """Open a resolution scope for ``SCOPED`` dependencies.
