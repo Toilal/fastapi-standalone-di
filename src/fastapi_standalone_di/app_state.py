@@ -52,20 +52,15 @@ class AppState:
     def set(self, key: str, value: Any) -> None:
         if self._state is not None:
             setattr(self._state, key, value)
-            # Keep the standalone singleton in sync so that FastAPIContainer
-            # and other non-request code can resolve the same values.
-            standalone = type(self).standalone()
-            if standalone is not self:
-                standalone._store[key] = value
-        self._store[key] = value
+        else:
+            self._store[key] = value
 
     def delete(self, key: str) -> None:
-        if self._state is not None and hasattr(self._state, key):
-            delattr(self._state, key)
-            standalone = type(self).standalone()
-            if standalone is not self:
-                standalone._store.pop(key, None)
-        self._store.pop(key, None)
+        if self._state is not None:
+            if hasattr(self._state, key):
+                delattr(self._state, key)
+        else:
+            self._store.pop(key, None)
 
     # --- constructors ---------------------------------------------------------
 
