@@ -65,7 +65,14 @@ _DEPENDS_SUPPORTS_SCOPE = (
 
 
 class _Depends(FastAPIDepends):
-    """A ``Depends`` that dereferences a ``RegistrableDependency`` to its impl."""
+    """A ``Depends`` that dereferences a ``RegistrableDependency`` to its impl.
+
+    ``scope`` (``"function"``/``"request"``) is forwarded to FastAPI for
+    introspection parity but has no intrinsic effect when resolving standalone:
+    there is no request lifecycle outside ASGI. :class:`FastAPIContainer`
+    interprets it only when its ``default_scope`` is a mapping keyed by these
+    literals; otherwise the value is inert.
+    """
 
     # The ``scope`` branch is resolved once, at class-definition time, rather
     # than on every instantiation.
