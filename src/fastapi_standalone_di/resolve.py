@@ -43,11 +43,13 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, cast, overload
+from urllib.parse import urlencode
 
 from fastapi import BackgroundTasks, Depends, Response
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
+from starlette.datastructures import State
 from starlette.requests import Request
 
 from fastapi_standalone_di._compat import (
@@ -58,18 +60,61 @@ from fastapi_standalone_di._compat import (
 from fastapi_standalone_di.app_state import AppState, get_app_state
 from fastapi_standalone_di.registration import RegistrableDependency
 
-# Stub Request used when resolving dependencies outside ASGI.
-_STUB_REQUEST = Request(
-    scope={
+
+class _StubApp:
+    """Minimal stand-in for ``request.app`` when no real application is set.
+
+    Exposes only ``state`` (backed by the container's :class:`AppState`); any
+    other attribute access is intentionally unsupported outside ASGI.
+    """
+
+    __slots__ = ("state",)
+
+    def __init__(self, state: State) -> None:
+        self.state = state
+
+
+async def _empty_receive() -> dict[str, Any]:
+    """ASGI receive channel for a standalone request: an empty, complete body."""
+    return {"type": "http.request", "body": b"", "more_body": False}
+
+
+def _build_stub_request(
+    *,
+    app: Any | None,
+    state: State,
+    query: Mapping[str, str],
+    path: Mapping[str, str],
+    cookies: Mapping[str, str],
+) -> Request:
+    """Build a fresh, self-contained ``Request`` for one resolution operation.
+
+    The scope is complete enough that ``request.app``/``.state``,
+    ``.query_params``, ``.path_params``, ``.cookies``, ``.client`` and
+    ``await request.body()`` all work; query/path/cookie values mirror the
+    container's per-source configuration.
+    """
+    headers: list[tuple[bytes, bytes]] = []
+    if cookies:
+        cookie_header = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        headers.append((b"cookie", cookie_header.encode("latin-1")))
+    scope = {
         "type": "http",
+        "http_version": "1.1",
         "method": "GET",
-        "headers": [],
-        "query_string": b"",
+        "scheme": "http",
         "path": "/",
+        "raw_path": b"/",
         "root_path": "",
-        "path_params": {},
+        "query_string": urlencode(list(query.items())).encode("latin-1"),
+        "headers": headers,
+        "path_params": dict(path),
+        "client": None,
+        "server": ("standalone", 0),
+        "app": app if app is not None else _StubApp(state),
     }
-)
+    return Request(scope, receive=_empty_receive)
+
 
 DependencyOverrides = dict[Callable[..., Any], Callable[..., Any]]
 
@@ -320,6 +365,7 @@ class FastAPIContainer:
         dependant_cache: DependantCache | bool = True,
         default_scope: DefaultScope = DependencyScope.CONTAINER,
         scopes: Scopes | None = None,
+        app: Any | None = None,
         query: ParamSourceArg | None = None,
         path: ParamSourceArg | None = None,
         headers: ParamSourceArg | None = None,
@@ -327,6 +373,7 @@ class FastAPIContainer:
     ) -> None:
         self._app_state = app_state if app_state is not None else AppState.standalone()
         self._dependency_overrides = dependency_overrides or {}
+        self._app = app
         self._query = _as_param_source(query)
         self._path = _as_param_source(path)
         self._headers = _as_param_source(headers)
@@ -441,6 +488,16 @@ class FastAPIContainer:
         """Apply dependency overrides, returning the substitute if one exists."""
         return self._dependency_overrides.get(call, call)
 
+    def _build_request(self) -> Request:
+        """Build the stub ``Request`` shared across one resolution operation."""
+        return _build_stub_request(
+            app=self._app,
+            state=self._app_state.as_state(),
+            query=self._query.values,
+            path=self._path.values,
+            cookies=self._cookies.values,
+        )
+
     def _resolve_param(
         self,
         source: str,
@@ -536,11 +593,15 @@ class FastAPIContainer:
         active_scope: "ResolutionScope | None",
     ) -> ResolvedDependencies:
         instances: dict[Callable[..., Any], Any] = {}
+        request = self._build_request()
         for dep in dependencies:
             resolved = _resolve_callable(dep)
             dep_scope = self._scope_of(dep, resolved, None)
             instances[resolved] = await self._resolve_single(
-                resolved, active_scope=active_scope, dep_scope=dep_scope
+                resolved,
+                active_scope=active_scope,
+                dep_scope=dep_scope,
+                request=request,
             )
         return ResolvedDependencies(instances)
 
@@ -552,13 +613,18 @@ class FastAPIContainer:
         dep_scope: DependencyScope,
         cache: bool = True,
         use_cache: bool = True,
+        request: Request | None = None,
     ) -> Any:
         """Recursively resolve a single dependency and all its sub-dependencies.
 
         *dep_scope* is the resolved scope of *call*; *cache* controls whether
         *call* itself is cached (``invoke`` passes ``False`` for the entry
         point); *use_cache* mirrors FastAPI's per-dependency caching flag.
+        *request* is the stub connection shared across this resolution
+        operation; the top-level call builds it when none is threaded in.
         """
+        if request is None:
+            request = self._build_request()
         instances, exit_stack = self._target(active_scope, dep_scope, call)
 
         if cache and use_cache and call in instances:
@@ -597,13 +663,13 @@ class FastAPIContainer:
                 active_scope=active_scope,
                 dep_scope=sub_scope,
                 use_cache=getattr(sub_dep, "use_cache", True),
+                request=request,
             )
             if sub_dep.name is not None:
                 sub_values[sub_dep.name] = sub_instance
 
-        # Outside ASGI, request/connection objects and header/query/path params
-        # are not available. Provide a stub Request for connection parameters and
-        # declared defaults for the rest so the dependency chain still works.
+        # Outside ASGI there is no live connection, so inject the operation's
+        # stub Request for any Request/HTTPConnection/WebSocket parameter.
         #
         # Identify connection parameters by the names FastAPI resolved from the
         # typed hints (stable across the supported range), not by re-inspecting
@@ -622,7 +688,7 @@ class FastAPIContainer:
             param = sig_params.get(conn_param)
             if param is not None and param.default is None:
                 continue
-            sub_values[conn_param] = _STUB_REQUEST
+            sub_values[conn_param] = request
 
         # A dependency may declare ``response: Response`` (to set headers/cookies/
         # status) or ``background_tasks: BackgroundTasks``. FastAPI records the
