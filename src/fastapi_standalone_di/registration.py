@@ -113,9 +113,13 @@ def patch_for_registrable_dependency_support() -> bool:
     introspection time (e.g. for OpenAPI). :class:`FastAPIContainer` resolves the
     indirection on its own and does not require this patch.
 
+    The patch only affects ``Depends`` objects created **after** it runs: any
+    ``Depends()`` already instantiated keeps the original class. Apply it at
+    import time, before the routes declaring the dependencies are defined.
+
     Returns ``True`` if the patch was applied, ``False`` if already patched.
     """
-    if FastAPIDepends == fastapi.params.Depends:
+    if FastAPIDepends is fastapi.params.Depends:
         fastapi.params.Depends = _Depends  # type: ignore[assignment,misc]
         return True
     return False
