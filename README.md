@@ -183,6 +183,59 @@ async def main() -> None:
     assert db is not None
 ```
 
+## Supplying query / path / header / cookie parameters
+
+Dependencies often declare `Query`, `Path`, `Header` or `Cookie` parameters.
+These arrive over the wire as **strings** in a real request; standalone, you
+supply them the same way — as strings, per source — and FastAPI coerces each to
+its declared type (raising a clear error on an incompatible value):
+
+```python
+from fastapi import Path, Query
+
+from fastapi_standalone_di import FastAPIContainer, ParamSource
+
+
+async def handler(
+    user_id: int = Path(...),
+    limit: int = Query(10),
+    q: str = Query(...),
+) -> tuple[int, int, str]:
+    return user_id, limit, q
+
+
+async def main() -> None:
+    container = FastAPIContainer(
+        path={"user_id": "42"},                    # dict shorthand: values only
+        query=ParamSource(values={"q": "hello"}),  # "10" default for limit is kept
+    )
+    assert await container.invoke(handler) == (42, 10, "hello")
+```
+
+Each source (`query`, `path`, `headers`, `cookies`) accepts either a bare
+`{name: value}` mapping or a `ParamSource(values=..., default=...)`. Resolution,
+per parameter, is: an explicit value (by name, then alias) → the parameter's own
+declared default → the source-wide `default` string → otherwise a
+`MissingParameterError` for a required parameter left unsupplied. The
+source-wide `default` only fills **required** parameters — it never overrides a
+parameter's declared default:
+
+```python
+from fastapi import Query
+
+from fastapi_standalone_di import FastAPIContainer, ParamSource
+
+
+async def handler(a: int = Query(...), b: str = Query(...)) -> tuple[int, str]:
+    return a, b
+
+
+async def main() -> None:
+    # One fallback string, coerced per declared type.
+    container = FastAPIContainer(query=ParamSource(default="0"))
+    assert await container.invoke(handler) == (0, "0")
+```
+
 ## Dependency scopes
 
 Each dependency has a **scope** that decides its lifetime and when its `yield`
@@ -269,8 +322,12 @@ recursively, and invokes each callable with the right execution model
 (coroutine, sync in a threadpool, sync/async generator via an `AsyncExitStack`).
 Each dependency is cached and torn down on the exit stack of its scope — the
 container's for `CONTAINER`, the resolution scope's for `SCOPED`.
-Request/header/query/cookie/path parameters — which don't exist outside ASGI —
-fall back to a stub `Request` and their declared defaults. A dependency
+Connection objects (`Request`/`WebSocket`) fall back to a stub. Header, query,
+path and cookie parameters — which don't exist outside ASGI — are supplied from
+the container's per-source configuration (as strings, coerced by FastAPI to the
+declared type), then their declared defaults, then a required-parameter error;
+see [Supplying query / path / header / cookie parameters](#supplying-query--path--header--cookie-parameters).
+A dependency
 declaring `response: Response` receives a fresh stub whose header/cookie/status
 mutations are accepted but have no transport effect (nothing sends it). A
 dependency declaring `background_tasks: BackgroundTasks` receives a real
