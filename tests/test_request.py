@@ -36,7 +36,9 @@ class TestCompleteScope:
             return request.client, request.scope["server"], request.url.scheme
 
         client, server, scheme = await FastAPIContainer().invoke(handler)
-        assert client is None
+        # No client outside ASGI. Older Starlette wraps it as Address(None, None)
+        # rather than returning None, so assert on the absence of a host.
+        assert client is None or client.host is None
         assert server == ("standalone", 0)
         assert scheme == "http"
 
