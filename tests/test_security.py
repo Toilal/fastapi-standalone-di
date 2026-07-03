@@ -18,7 +18,7 @@ def root_over_security(inner: list[str] = Security(secured_leaf, scopes=["items"
     return inner
 
 
-async def test_security_scopes_injected_for_root_dependency() -> None:
+async def test_security_scopes_empty_by_default() -> None:
     async with FastAPIContainer() as container:
         result = await container.get(wants_scopes)
     assert isinstance(result, SecurityScopes)
@@ -26,10 +26,17 @@ async def test_security_scopes_injected_for_root_dependency() -> None:
     assert result.scope_str == ""
 
 
-async def test_dependency_behind_security_resolves() -> None:
-    async with FastAPIContainer() as container:
+async def test_security_scopes_from_container_config() -> None:
+    async with FastAPIContainer(security_scopes=["me", "items"]) as container:
+        result = await container.get(wants_scopes)
+    assert result.scopes == ["me", "items"]
+    assert result.scope_str == "me items"
+
+
+async def test_configured_scopes_reach_dependency_behind_security() -> None:
+    async with FastAPIContainer(security_scopes=["me"]) as container:
         result = await container.invoke(root_over_security)
-    # The cumulative ``["items"]`` scope a parent declares via ``Security(...)``
-    # is not propagated standalone: the re-introspected leaf sees only its own
-    # (empty) scopes.
-    assert result == []
+    # Scopes come from the container config, not from the parent's
+    # ``Security(..., scopes=["items"])`` marker: standalone has no chain to
+    # accumulate, so the configured scopes apply uniformly across the tree.
+    assert result == ["me"]
