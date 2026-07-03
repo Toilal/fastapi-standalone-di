@@ -10,6 +10,10 @@ def wants_scopes(scopes: SecurityScopes) -> SecurityScopes:
     return scopes
 
 
+def wants_scopes_too(scopes: SecurityScopes) -> SecurityScopes:
+    return scopes
+
+
 def secured_leaf(scopes: SecurityScopes) -> list[str]:
     return list(scopes.scopes)
 
@@ -40,3 +44,13 @@ async def test_configured_scopes_reach_dependency_behind_security() -> None:
     # ``Security(..., scopes=["items"])`` marker: standalone has no chain to
     # accumulate, so the configured scopes apply uniformly across the tree.
     assert result == ["me"]
+
+
+async def test_mutating_injected_scopes_does_not_poison_config() -> None:
+    async with FastAPIContainer(security_scopes=["me"]) as container:
+        first = await container.get(wants_scopes)
+        first.scopes.append("stolen")
+        # A distinct dependency gets a fresh SecurityScopes, so the mutation
+        # above must not leak through the container's shared config.
+        second = await container.get(wants_scopes_too)
+    assert second.scopes == ["me"]

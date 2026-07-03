@@ -351,8 +351,9 @@ class FastAPIContainer:
 
     Encapsulates the configuration needed to resolve a dependency tree:
     application state, dependency overrides, introspection cache, the
-    :class:`DependencyScope` policy, and the query/path/header/cookie parameter
-    values to supply outside ASGI (see :class:`ParamSource`).
+    :class:`DependencyScope` policy, the query/path/header/cookie parameter
+    values to supply outside ASGI (see :class:`ParamSource`), and the security
+    scopes to expose to any ``SecurityScopes`` parameter.
 
     Example::
 
