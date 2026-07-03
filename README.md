@@ -236,6 +236,54 @@ async def main() -> None:
     assert await container.invoke(handler) == (0, "0")
 ```
 
+### The standalone `Request`
+
+A dependency may declare `request: Request` (or `HTTPConnection`). Outside ASGI
+there is no live connection, so the container injects a **stub `Request`** built
+per resolution operation — one `get`/`invoke`/`resolve` call — and shared across
+that call's whole dependency tree, exactly as a real request is shared by all
+dependencies of one HTTP request. Separate operations get separate requests, so
+nothing leaks between them.
+
+```python
+from fastapi import Request
+
+from fastapi_standalone_di import FastAPIContainer, set_app_state_value
+
+
+async def handler(request: Request) -> dict[str, object]:
+    return {
+        "limit": request.query_params.get("limit"),  # from query=
+        "db": request.app.state.db,                   # from app_state
+        "body": await request.body(),                 # b"" standalone
+    }
+
+
+async def main() -> None:
+    set_app_state_value("db", "the-db")
+    container = FastAPIContainer(query={"limit": "10"})
+    assert await container.invoke(handler) == {
+        "limit": "10",
+        "db": "the-db",
+        "body": b"",
+    }
+```
+
+What the stub supports:
+
+- `request.query_params`, `request.path_params`, `request.cookies` — mirror the
+  container's `query=` / `path=` / `cookies=` configuration.
+- `request.app.state` — reflects the container's `AppState` (shared storage). Pass
+  `app=your_fastapi_app` to make `request.app` your real application instead.
+- `await request.body()` returns `b""`; `request.client` is `None`; `scheme`,
+  `server`, `http_version` carry neutral standalone defaults.
+- `request.state` is a per-operation scratchpad, shared across the dependency
+  tree of one call and reset for the next.
+
+There is no transport: header values are best supplied through typed `Header`
+parameters (see above) rather than read from `request.headers`, and response
+mutations have no effect.
+
 ## Dependency scopes
 
 Each dependency has a **scope** that decides its lifetime and when its `yield`
@@ -322,7 +370,9 @@ recursively, and invokes each callable with the right execution model
 (coroutine, sync in a threadpool, sync/async generator via an `AsyncExitStack`).
 Each dependency is cached and torn down on the exit stack of its scope — the
 container's for `CONTAINER`, the resolution scope's for `SCOPED`.
-Connection objects (`Request`/`WebSocket`) fall back to a stub. Header, query,
+Connection objects (`Request`/`HTTPConnection`) are served by a stub built once
+per resolution operation and shared across its dependency tree (see
+[The standalone `Request`](#the-standalone-request)). Header, query,
 path and cookie parameters — which don't exist outside ASGI — are supplied from
 the container's per-source configuration (as strings, coerced by FastAPI to the
 declared type), then their declared defaults, then a required-parameter error;

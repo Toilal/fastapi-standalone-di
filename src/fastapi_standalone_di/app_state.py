@@ -62,6 +62,17 @@ class AppState:
         else:
             self._store.pop(key, None)
 
+    def as_state(self) -> State:
+        """Return a Starlette ``State`` backed by this ``AppState``'s storage.
+
+        Reads and writes on the returned ``State`` share the same underlying
+        store, so a stubbed ``request.app.state`` stays in sync with this
+        ``AppState`` (and with :func:`set_app_state_value`).
+        """
+        if self._state is not None:
+            return self._state
+        return State(self._store)
+
     # --- constructors ---------------------------------------------------------
 
     @classmethod
