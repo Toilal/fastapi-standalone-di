@@ -60,9 +60,21 @@ asyncio.run(main())
 - `container.invoke(fn)` — resolve `fn`'s `Depends()` parameters and call it (entry point, not cached).
 - `container.scope()` — open a short-lived scope (see [Dependency scopes](#dependency-scopes)).
 
-By default, resolved instances are cached on the container for reuse across calls
-(container scope). `await container.aclose()` closes the container and runs any
-`yield` teardown.
+### Caching
+
+Resolved instances are cached, keyed by the resolved callable, within the scope
+that owns them. The default scope is the **container** itself, so `get`, `resolve`
+and their sub-dependencies reuse the same instance across every call until
+`await container.aclose()` (or `container.clear_cache()`, which drops the cached
+instances without running teardown). `SCOPED` dependencies are cached per open
+scope instead (see [Dependency scopes](#dependency-scopes)), and `invoke(fn)`
+never caches `fn` itself — it is treated as a one-shot entry point.
+
+Caching is per injection *within* a scope, so two consumers of the same
+dependency share one instance. FastAPI's `use_cache=False` on a `Depends(...)`
+opts that dependency out: it is rebuilt fresh at each injection point, while its
+`yield` teardown still runs on its scope's exit stack. `await container.aclose()`
+closes the container and runs any `yield` teardown.
 
 ### `yield` dependencies and teardown
 

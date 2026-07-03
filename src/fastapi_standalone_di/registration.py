@@ -33,7 +33,7 @@ class RegistrableDependency:
     _impl: Callable[..., Any] | None = None
 
     @classproperty
-    def impl(cls) -> Callable[..., Any] | None:
+    def impl(cls) -> Callable[..., Any]:
         return cls.dependency()
 
     @classmethod
@@ -42,8 +42,12 @@ class RegistrableDependency:
         cls._impl = impl
 
     @classmethod
-    def dependency(cls) -> Callable[..., Any] | None:
-        """Entry point for ``fastapi.Depends``: return the registered implementation."""
+    def dependency(cls) -> Callable[..., Any]:
+        """Entry point for ``fastapi.Depends``: return the registered implementation.
+
+        Raises :class:`RuntimeError` when no implementation is registered — it
+        never returns ``None``.
+        """
         if cls._impl is None:
             raise RuntimeError(
                 f"No implementation registered for {cls.__module__}.{cls.__name__}"
@@ -61,7 +65,14 @@ _DEPENDS_SUPPORTS_SCOPE = (
 
 
 class _Depends(FastAPIDepends):
-    """A ``Depends`` that dereferences a ``RegistrableDependency`` to its impl."""
+    """A ``Depends`` that dereferences a ``RegistrableDependency`` to its impl.
+
+    ``scope`` (``"function"``/``"request"``) is forwarded to FastAPI for
+    introspection parity but has no intrinsic effect when resolving standalone:
+    there is no request lifecycle outside ASGI. :class:`FastAPIContainer`
+    interprets it only when its ``default_scope`` is a mapping keyed by these
+    literals; otherwise the value is inert.
+    """
 
     # The ``scope`` branch is resolved once, at class-definition time, rather
     # than on every instantiation.
@@ -109,9 +120,13 @@ def patch_for_registrable_dependency_support() -> bool:
     introspection time (e.g. for OpenAPI). :class:`FastAPIContainer` resolves the
     indirection on its own and does not require this patch.
 
+    The patch only affects ``Depends`` objects created **after** it runs: any
+    ``Depends()`` already instantiated keeps the original class. Apply it at
+    import time, before the routes declaring the dependencies are defined.
+
     Returns ``True`` if the patch was applied, ``False`` if already patched.
     """
-    if FastAPIDepends == fastapi.params.Depends:
+    if FastAPIDepends is fastapi.params.Depends:
         fastapi.params.Depends = _Depends  # type: ignore[assignment,misc]
         return True
     return False

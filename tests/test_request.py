@@ -81,6 +81,22 @@ class TestConfigReflection:
             "cookies": {"session": "xyz"},
         }
 
+    async def test_cookie_special_chars_round_trip(self) -> None:
+        def handler(request: Request) -> dict[str, str]:
+            return dict(request.cookies)
+
+        cookies = {"sid": "a; b=c", "plain": "hello world"}
+        container = FastAPIContainer(cookies=cookies)
+        assert await container.invoke(handler) == cookies
+
+    async def test_non_latin1_cookie_value_raises(self) -> None:
+        def handler(request: Request) -> dict[str, str]:
+            return dict(request.cookies)
+
+        container = FastAPIContainer(cookies={"sid": "☕"})
+        with pytest.raises(UnicodeEncodeError):
+            await container.invoke(handler)
+
 
 class TestSharingAndIsolation:
     async def test_state_shared_within_resolution_tree(self) -> None:
