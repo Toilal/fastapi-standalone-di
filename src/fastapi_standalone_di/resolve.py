@@ -341,7 +341,12 @@ class ResolvedDependencies:
         except KeyError:
             name = getattr(dependency, "__qualname__", repr(dependency))
             module = getattr(dependency, "__module__", "?")
-            if not transitive and key in self._all:
+            if transitive:
+                raise KeyError(
+                    f"Dependency {module}.{name} was not resolved as part of "
+                    "this operation."
+                ) from None
+            if key in self._all:
                 raise KeyError(
                     f"Dependency {module}.{name} was resolved as a sub-dependency, "
                     "not a top-level one. Pass transitive=True to retrieve it."
@@ -706,6 +711,42 @@ class FastAPIContainer:
             )
         return ResolvedDependencies(instances, collected)
 
+    def _collect_cached_subtree(
+        self,
+        call: Callable[..., Any],
+        *,
+        active_scope: "ResolutionScope | None",
+        collected: dict[Callable[..., Any], Any],
+    ) -> None:
+        """Record the already-cached sub-dependencies of a cache-hit *call*.
+
+        On a cache hit, :meth:`_resolve_single` skips :meth:`_instantiate`, so
+        the sub-dependencies are never walked and would be missing from
+        *collected*. This mirrors that walk over the cached ``Dependant`` and
+        pulls each sub-dependency straight from its scope cache — it never
+        rebuilds an instance nor mutates a cache, so resolution and caching
+        semantics are untouched. Sub-dependencies absent from any cache (e.g.
+        ``use_cache=False`` transients) are simply skipped; each is recorded
+        after its own descendants so the resolution order still holds.
+        """
+        effective_call = self._apply_overrides(call)
+        dependant = _get_dependant(effective_call, self._dependant_cache)
+        for sub_dep in dependant.dependencies:
+            original = cast("Callable[..., Any]", sub_dep.call)
+            sub_call = _resolve_callable(original)
+            if sub_call in collected:
+                continue
+            sub_scope = self._scope_of(
+                original, sub_call, getattr(sub_dep, "scope", None)
+            )
+            instances, _, _ = self._target(active_scope, sub_scope, sub_call)
+            if sub_call not in instances:
+                continue
+            self._collect_cached_subtree(
+                sub_call, active_scope=active_scope, collected=collected
+            )
+            collected[sub_call] = instances[sub_call]
+
     async def _resolve_single(
         self,
         call: Callable[..., Any],
@@ -736,6 +777,10 @@ class FastAPIContainer:
         shared = cache and use_cache
         if shared and call in instances:
             instance = instances[call]
+            if collected is not None:
+                self._collect_cached_subtree(
+                    call, active_scope=active_scope, collected=collected
+                )
         elif not shared:
             instance = await self._instantiate(
                 call,
@@ -757,6 +802,10 @@ class FastAPIContainer:
             async with lock:
                 if call in instances:
                     instance = instances[call]
+                    if collected is not None:
+                        self._collect_cached_subtree(
+                            call, active_scope=active_scope, collected=collected
+                        )
                 else:
                     instance = await self._instantiate(
                         call,

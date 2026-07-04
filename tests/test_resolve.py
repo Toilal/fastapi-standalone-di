@@ -598,6 +598,32 @@ class TestResolvedSubDependencies:
         cached_leaf = await c.get(ILeafDep)
         assert deps.get(ILeafDep, transitive=True) is cached_leaf
 
+    async def test_transitive_survives_top_level_cache_hit(self) -> None:
+        """Sub-deps stay reachable when the whole tree is served from cache."""
+        c = FastAPIContainer()
+        await c.resolve(IRootDep)  # warm the cache
+        deps = await c.resolve(IRootDep)  # top-level cache hit, no re-instantiation
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert isinstance(deps.get(ILeafDep, transitive=True), LeafDep)
+
+    async def test_cache_hit_preserves_resolution_order(self) -> None:
+        """The cache-walk records sub-deps before their dependents, as a build does."""
+        c = FastAPIContainer()
+        await c.resolve(IRootDep)
+        deps = await c.resolve(IRootDep)
+        order = list(deps.all_instances())
+        assert order.index(LeafDep) < order.index(MiddleDep) < order.index(RootDep)
+
+    async def test_cache_hit_exposes_same_instances(self) -> None:
+        """Sub-deps exposed after a cache hit are the cached instances themselves."""
+        c = FastAPIContainer()
+        first = await c.resolve(IRootDep)
+        second = await c.resolve(IRootDep)
+        assert second.get(IMiddleDep, transitive=True) is first.get(
+            IMiddleDep, transitive=True
+        )
+        assert second.get(ILeafDep, transitive=True) is await c.get(ILeafDep)
+
     async def test_all_instances_is_read_only(self) -> None:
         """all_instances() returns an immutable view."""
         c = FastAPIContainer()
@@ -612,6 +638,15 @@ class TestResolvedSubDependencies:
         deps = await c.resolve(IRootDep)
         order = list(deps.all_instances())
         assert order.index(LeafDep) < order.index(MiddleDep) < order.index(RootDep)
+
+    async def test_cache_hit_skips_uncached_transients(self) -> None:
+        """The cache-walk skips use_cache=False sub-deps absent from any cache."""
+        c = FastAPIContainer()
+        await c.resolve(root_uncached)  # build: fresh_dep transient is recorded
+        deps = await c.resolve(root_uncached)  # cache hit: walk can't recover it
+        keys = set(deps.all_instances())
+        assert {root_uncached, consumer_a, consumer_b} <= keys
+        assert fresh_dep not in keys
 
     async def test_use_cache_false_keeps_last_built_duplicate(self) -> None:
         """A use_cache=False sub-dep keeps only its last-built instance."""
