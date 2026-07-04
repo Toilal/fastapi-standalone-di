@@ -1,6 +1,9 @@
 name: ci
 on:
-  push: ~
+  # Branch pushes only. Tags are cut from already-tested commits, and
+  # semantic-release runs on a detached HEAD there (it would just fail).
+  push:
+    branches: ['**']
   pull_request: ~
 jobs:
   ci:
@@ -202,7 +205,9 @@ jobs:
       - name: Upload to pypi
         # Trusted Publishing via the job's OIDC token (see permissions above);
         # requires a trusted publisher configured on PyPI for this repo + ci.yml.
-        run: uv publish --trusted-publishing always dist/*.tar.gz dist/*.whl
+        # --check-url skips files already on the index, so re-running the job (or
+        # a push that doesn't bump the version) never fails on an existing upload.
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/fastapi-standalone-di/ dist/*.tar.gz dist/*.whl
 
       - name: Publish release
         run: uvx --from python-semantic-release semantic-release publish
