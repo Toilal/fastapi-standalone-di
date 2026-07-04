@@ -573,7 +573,7 @@ class TestResolvedSubDependencies:
         """get()/optional() remain limited to the explicitly resolved deps."""
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
-        with pytest.raises(KeyError, match="was not resolved"):
+        with pytest.raises(KeyError, match="Use get_transitive"):
             deps.get(IMiddleDep)
         assert deps.optional(ILeafDep) is None
 

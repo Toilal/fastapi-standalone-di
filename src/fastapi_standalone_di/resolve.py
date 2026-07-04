@@ -336,6 +336,11 @@ class ResolvedDependencies:
         except KeyError:
             name = getattr(dependency, "__qualname__", repr(dependency))
             module = getattr(dependency, "__module__", "?")
+            if key in self._all:
+                raise KeyError(
+                    f"Dependency {module}.{name} was resolved as a sub-dependency, "
+                    "not a top-level one. Use get_transitive() to retrieve it."
+                ) from None
             raise KeyError(
                 f"Dependency {module}.{name} was not resolved. "
                 "Did you pass it to resolve()?"
