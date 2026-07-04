@@ -107,17 +107,101 @@ async def plain_async_dep() -> str:
 # ---------------------------------------------------------------------------
 
 
+# --- diamond dependency graph: Diamond -> {Left, Right} -> Shared ----------
+
+
+class IShared(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class SharedDep(IShared):
+    def value(self) -> str:
+        return "shared"
+
+
+class ILeftDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class LeftDep(ILeftDep):
+    def __init__(self, shared: IShared = Depends(IShared)) -> None:
+        self.shared = shared
+
+    def value(self) -> str:
+        return "left"
+
+
+class IRightDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class RightDep(IRightDep):
+    def __init__(self, shared: IShared = Depends(IShared)) -> None:
+        self.shared = shared
+
+    def value(self) -> str:
+        return "right"
+
+
+class IDiamondDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class DiamondDep(IDiamondDep):
+    def __init__(
+        self,
+        left: ILeftDep = Depends(ILeftDep),
+        right: IRightDep = Depends(IRightDep),
+    ) -> None:
+        self.left = left
+        self.right = right
+
+    def value(self) -> str:
+        return "diamond"
+
+
+# --- SCOPED yield dependency behind an invoke() entry point ----------------
+
+_session_teardowns: list[object] = []
+
+
+class Session:
+    pass
+
+
+async def _session_factory() -> AsyncIterator[Session]:
+    session = Session()
+    yield session
+    _session_teardowns.append(session)
+
+
+def _handler_with_session(session: Session = Depends(_session_factory)) -> str:
+    return "handled"
+
+
 @pytest.fixture(autouse=True)
 def _register_deps() -> Iterator[None]:
     ILeafDep.register(LeafDep)
     IMiddleDep.register(MiddleDep)
     IRootDep.register(RootDep)
     IYieldDep.register(_yield_dep_factory)
+    IShared.register(SharedDep)
+    ILeftDep.register(LeftDep)
+    IRightDep.register(RightDep)
+    IDiamondDep.register(DiamondDep)
     yield
     ILeafDep.register(None)
     IMiddleDep.register(None)
     IRootDep.register(None)
     IYieldDep.register(None)
+    IShared.register(None)
+    ILeftDep.register(None)
+    IRightDep.register(None)
+    IDiamondDep.register(None)
 
 
 # --- use_cache=False fixtures ---------------------------------------------
@@ -552,6 +636,35 @@ class TestResolvedSubDependencies:
         keys = set(deps.all_instances())
         assert {RootDep, MiddleDep, LeafDep} <= keys
 
+    async def test_all_instances_across_multiple_top_level(self) -> None:
+        """A sub-dep shared by several top-level deps is reachable transitively."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep, IMiddleDep)
+        assert deps.get(IRootDep).value() == "root(middle(leaf))"
+        assert deps.get(IMiddleDep).value() == "middle(leaf)"
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert deps.get(ILeafDep, transitive=True) is deps.get(IMiddleDep).leaf
+
+    async def test_intermediate_cache_hit_walks_subtree(self) -> None:
+        """A cached middle node still contributes its sub-deps to a fresh parent."""
+        c = FastAPIContainer()
+        await c.resolve(IMiddleDep)  # cache Middle + Leaf
+        deps = await c.resolve(IRootDep)  # Root fresh, Middle is a cache hit here
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert deps.get(ILeafDep, transitive=True) is await c.get(ILeafDep)
+
+    async def test_empty_resolve_has_no_instances(self) -> None:
+        """Resolving nothing yields an empty instance set."""
+        deps = await FastAPIContainer().resolve()
+        assert dict(deps.all_instances()) == {}
+
+    async def test_keys_are_implementations_not_interfaces(self) -> None:
+        """all_instances() is keyed by resolved impls, not the interface."""
+        deps = await FastAPIContainer().resolve(IRootDep)
+        keys = set(deps.all_instances())
+        assert LeafDep in keys
+        assert ILeafDep not in keys
+
     async def test_transitive_reaches_sub_dependencies(self) -> None:
         """get(transitive=True) returns sub-dep instances by interface or impl."""
         c = FastAPIContainer()
@@ -690,3 +803,51 @@ class TestInvokeResolved:
             deps = await scope.invoke_resolved(handler_with_deps)
         assert deps.get(handler_with_deps) == "root(middle(leaf))"
         assert isinstance(deps.get(IMiddleDep, transitive=True), MiddleDep)
+
+
+class TestDiamondResolution:
+    async def test_shared_sub_dep_is_identical_across_branches(self) -> None:
+        """A diamond's shared leaf is one instance, reachable transitively."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IDiamondDep)
+        shared = deps.get(IShared, transitive=True)
+        diamond = deps.get(IDiamondDep)
+        assert diamond.left.shared is shared
+        assert diamond.right.shared is shared
+
+    async def test_diamond_resolution_order(self) -> None:
+        """The shared dep is recorded before both branches, branches before root."""
+        deps = await FastAPIContainer().resolve(IDiamondDep)
+        order = list(deps.all_instances())
+        assert order.index(SharedDep) < order.index(LeftDep)
+        assert order.index(SharedDep) < order.index(RightDep)
+        assert order.index(LeftDep) < order.index(DiamondDep)
+        assert order.index(RightDep) < order.index(DiamondDep)
+
+    async def test_diamond_survives_cache_hit(self) -> None:
+        """After a cache hit, the walk dedups the shared dep yet exposes the tree."""
+        c = FastAPIContainer()
+        await c.resolve(IDiamondDep)  # warm the cache
+        deps = await c.resolve(IDiamondDep)  # cache hit → walk with shared-dep dedup
+        assert {SharedDep, LeftDep, RightDep, DiamondDep} <= set(deps.all_instances())
+        shared = deps.get(IShared, transitive=True)
+        assert deps.get(ILeftDep, transitive=True).shared is shared
+        assert deps.get(IRightDep, transitive=True).shared is shared
+
+
+class TestInvokeResolvedLifetime:
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> Iterator[None]:
+        _session_teardowns.clear()
+        yield
+        _session_teardowns.clear()
+
+    async def test_scoped_sub_dep_torn_down_but_still_referenced(self) -> None:
+        """A SCOPED sub-dep is torn down before invoke_resolved returns, yet the
+        bag still references the (now closed) instance — the documented caveat."""
+        c = FastAPIContainer(scopes={_session_factory: DependencyScope.SCOPED})
+        deps = await c.invoke_resolved(_handler_with_session)
+        assert deps.get(_handler_with_session) == "handled"
+        session = deps.get(_session_factory, transitive=True)
+        assert isinstance(session, Session)
+        assert session in _session_teardowns
