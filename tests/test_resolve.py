@@ -120,6 +120,37 @@ def _register_deps() -> Iterator[None]:
     IYieldDep.register(None)
 
 
+# --- use_cache=False fixtures ---------------------------------------------
+
+_fresh_counter = 0
+
+
+def fresh_dep() -> int:
+    """A dependency that yields a distinct value at every construction."""
+    global _fresh_counter
+    _fresh_counter += 1
+    return _fresh_counter
+
+
+def consumer_a(value: int = Depends(fresh_dep, use_cache=False)) -> int:
+    return value
+
+
+def consumer_b(value: int = Depends(fresh_dep, use_cache=False)) -> int:
+    return value
+
+
+def root_uncached(
+    a: int = Depends(consumer_a),
+    b: int = Depends(consumer_b),
+) -> tuple[int, int]:
+    return (a, b)
+
+
+def handler_with_deps(root: IRootDep = Depends(IRootDep)) -> str:
+    return root.value()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -508,3 +539,119 @@ class TestConcurrentResolution:
             )
             assert _slow_teardowns == 0
         assert _slow_teardowns == 1
+
+
+# --- exposing resolved sub-dependencies (#21) ------------------------------
+
+
+class TestResolvedSubDependencies:
+    async def test_all_instances_includes_sub_dependencies(self) -> None:
+        """all_instances() exposes the sub-deps resolved along the way."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        keys = set(deps.all_instances())
+        assert {RootDep, MiddleDep, LeafDep} <= keys
+
+    async def test_get_transitive_reaches_sub_dependencies(self) -> None:
+        """get_transitive() returns sub-dep instances by interface or impl."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        middle = deps.get_transitive(IMiddleDep)
+        leaf = deps.get_transitive(ILeafDep)
+        assert isinstance(middle, MiddleDep)
+        assert isinstance(leaf, LeafDep)
+
+    async def test_transitive_instances_are_the_ones_wired_in(self) -> None:
+        """The exposed sub-deps are identical to those injected into the parent."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        root = deps.get(IRootDep)
+        assert deps.get_transitive(IMiddleDep) is root.middle
+        assert deps.get_transitive(ILeafDep) is root.middle.leaf
+
+    async def test_get_stays_top_level_only(self) -> None:
+        """get()/optional() remain limited to the explicitly resolved deps."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        with pytest.raises(KeyError, match="was not resolved"):
+            deps.get(IMiddleDep)
+        assert deps.optional(ILeafDep) is None
+
+    async def test_optional_transitive(self) -> None:
+        """optional_transitive() returns the sub-dep, or None when absent."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        assert deps.optional_transitive(ILeafDep) is not None
+        assert deps.optional_transitive(plain_sync_dep) is None
+
+    async def test_get_transitive_missing_raises(self) -> None:
+        """get_transitive() raises KeyError for a callable never resolved."""
+        c = FastAPIContainer()
+        deps = await c.resolve(ILeafDep)
+        with pytest.raises(KeyError, match="not resolved as part of this operation"):
+            deps.get_transitive(IRootDep)
+
+    async def test_transitive_instance_matches_container_cache(self) -> None:
+        """A CONTAINER sub-dep exposed here is the same the container caches."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        cached_leaf = await c.get(ILeafDep)
+        assert deps.get_transitive(ILeafDep) is cached_leaf
+
+    async def test_all_instances_is_read_only(self) -> None:
+        """all_instances() returns an immutable view."""
+        c = FastAPIContainer()
+        deps = await c.resolve(ILeafDep)
+        view = deps.all_instances()
+        with pytest.raises(TypeError):
+            view[LeafDep] = object()  # type: ignore[index]
+
+    async def test_resolution_order_sub_deps_before_dependents(self) -> None:
+        """Instances are ordered sub-dependencies first, then their dependents."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        order = list(deps.all_instances())
+        assert order.index(LeafDep) < order.index(MiddleDep) < order.index(RootDep)
+
+    async def test_use_cache_false_keeps_last_built_duplicate(self) -> None:
+        """A use_cache=False sub-dep keeps only its last-built instance."""
+        c = FastAPIContainer()
+        deps = await c.resolve(root_uncached)
+        a_value = deps.get_transitive(consumer_a)
+        b_value = deps.get_transitive(consumer_b)
+        assert a_value != b_value  # distinct builds — resolution semantics intact
+        assert deps.get_transitive(fresh_dep) == b_value
+
+    async def test_backward_compatible_single_arg_construction(self) -> None:
+        """Constructing without the full map falls back to the top-level one."""
+        deps = ResolvedDependencies({LeafDep: LeafDep()})
+        assert deps.get_transitive(LeafDep) is deps.get(LeafDep)
+        assert set(deps.all_instances()) == {LeafDep}
+
+
+class TestInvokeResolved:
+    async def test_invoke_resolved_get_returns_call_result(self) -> None:
+        """The bag's get(call) yields the invocation result."""
+        c = FastAPIContainer()
+        deps = await c.invoke_resolved(handler_with_deps)
+        assert deps.get(handler_with_deps) == "root(middle(leaf))"
+
+    async def test_invoke_resolved_exposes_sub_dependencies(self) -> None:
+        """Sub-deps resolved for the call are reachable on the returned bag."""
+        c = FastAPIContainer()
+        deps = await c.invoke_resolved(handler_with_deps)
+        assert isinstance(deps.get_transitive(IRootDep), RootDep)
+        assert isinstance(deps.get_transitive(ILeafDep), LeafDep)
+
+    async def test_invoke_still_returns_result(self) -> None:
+        """invoke() keeps returning the plain call result."""
+        c = FastAPIContainer()
+        assert await c.invoke(handler_with_deps) == "root(middle(leaf))"
+
+    async def test_scope_invoke_resolved(self) -> None:
+        """ResolutionScope.invoke_resolved mirrors the container method."""
+        c = FastAPIContainer()
+        async with c.scope() as scope:
+            deps = await scope.invoke_resolved(handler_with_deps)
+        assert deps.get(handler_with_deps) == "root(middle(leaf))"
+        assert isinstance(deps.get_transitive(IMiddleDep), MiddleDep)

@@ -44,6 +44,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from http.cookies import SimpleCookie
+from types import MappingProxyType
 from typing import Any, cast, overload
 from urllib.parse import urlencode
 
@@ -292,15 +293,29 @@ class DependantCache:
 
 
 class ResolvedDependencies:
-    """Container for dependencies resolved by :meth:`FastAPIContainer.resolve`."""
+    """Container for dependencies resolved by :meth:`FastAPIContainer.resolve`.
 
-    __slots__ = ("_instances",)
+    :meth:`get` / :meth:`optional` address only the **top-level** dependencies
+    explicitly passed to :meth:`FastAPIContainer.resolve` (or the entry point of
+    :meth:`FastAPIContainer.invoke_resolved`). The sub-dependencies resolved
+    along the way are also captured and reachable through the ``transitive``
+    accessors and :meth:`all_instances`, keyed by their resolved callable.
+
+    A dependency injected with FastAPI's ``use_cache=False`` is rebuilt fresh at
+    each injection point; only the last instance built during the operation is
+    retained under its callable key, so such duplicates are not individually
+    addressable here.
+    """
+
+    __slots__ = ("_all", "_instances")
 
     def __init__(
         self,
         instances: dict[Callable[..., Any], Any],
+        all_instances: dict[Callable[..., Any], Any] | None = None,
     ) -> None:
         self._instances = instances
+        self._all = all_instances if all_instances is not None else instances
 
     @overload
     def get[T](self, dependency: type[T]) -> T: ...
@@ -309,9 +324,11 @@ class ResolvedDependencies:
     def get[T](self, dependency: Callable[..., T]) -> T: ...
 
     def get(self, dependency: Callable[..., Any]) -> Any:
-        """Retrieve a resolved dependency by its type or callable.
+        """Retrieve a top-level resolved dependency by its type or callable.
 
-        Raises :class:`KeyError` if the dependency was not resolved.
+        Raises :class:`KeyError` if the dependency was not resolved. Only
+        top-level dependencies are addressable — use :meth:`get_transitive` to
+        reach a sub-dependency.
         """
         key = _resolve_callable(dependency)
         try:
@@ -331,9 +348,54 @@ class ResolvedDependencies:
     def optional[T](self, dependency: Callable[..., T]) -> T | None: ...
 
     def optional(self, dependency: Callable[..., Any]) -> Any | None:
-        """Retrieve a resolved dependency, or ``None`` if not resolved."""
+        """Retrieve a top-level resolved dependency, or ``None`` if not resolved."""
         key = _resolve_callable(dependency)
         return self._instances.get(key)
+
+    @overload
+    def get_transitive[T](self, dependency: type[T]) -> T: ...
+
+    @overload
+    def get_transitive[T](self, dependency: Callable[..., T]) -> T: ...
+
+    def get_transitive(self, dependency: Callable[..., Any]) -> Any:
+        """Retrieve any instance resolved during the operation, sub-deps included.
+
+        Unlike :meth:`get`, this searches the full set of instances built while
+        resolving the tree — top-level dependencies **and** their
+        sub-dependencies. Raises :class:`KeyError` if the callable was not
+        resolved at all.
+        """
+        key = _resolve_callable(dependency)
+        try:
+            return self._all[key]
+        except KeyError:
+            name = getattr(dependency, "__qualname__", repr(dependency))
+            module = getattr(dependency, "__module__", "?")
+            raise KeyError(
+                f"Dependency {module}.{name} was not resolved as part of this "
+                "operation."
+            ) from None
+
+    @overload
+    def optional_transitive[T](self, dependency: type[T]) -> T | None: ...
+
+    @overload
+    def optional_transitive[T](self, dependency: Callable[..., T]) -> T | None: ...
+
+    def optional_transitive(self, dependency: Callable[..., Any]) -> Any | None:
+        """Retrieve any resolved instance (sub-deps included), or ``None``."""
+        key = _resolve_callable(dependency)
+        return self._all.get(key)
+
+    def all_instances(self) -> Mapping[Callable[..., Any], Any]:
+        """Return a read-only view of every instance resolved in this operation.
+
+        Keyed by resolved callable and ordered by resolution (sub-dependencies
+        before the dependents that consume them). Includes both the top-level
+        dependencies and their sub-dependencies.
+        """
+        return MappingProxyType(self._all)
 
 
 def _resolve_callable(dep: Callable[..., Any]) -> Callable[..., Any]:
@@ -473,6 +535,19 @@ class FastAPIContainer:
         """
         async with self.scope() as scope:
             return await scope.invoke(call)
+
+    async def invoke_resolved(self, call: Callable[..., Any]) -> ResolvedDependencies:
+        """Resolve and invoke *call*, returning the resolved dependencies.
+
+        Like :meth:`invoke`, *call* runs inside an implicit resolution scope, so
+        ``SCOPED`` dependencies are torn down before this returns: the returned
+        bag still references those instances for inspection, but their ``yield``
+        teardown has already run. ``CONTAINER`` instances remain live on the
+        container. The bag's :meth:`~ResolvedDependencies.get` for *call* is the
+        invocation result.
+        """
+        async with self.scope() as scope:
+            return await scope.invoke_resolved(call)
 
     async def resolve(
         self,
@@ -632,6 +707,7 @@ class FastAPIContainer:
         active_scope: "ResolutionScope | None",
     ) -> ResolvedDependencies:
         instances: dict[Callable[..., Any], Any] = {}
+        collected: dict[Callable[..., Any], Any] = {}
         request = _LazyRequest(self._build_request)
         for dep in dependencies:
             resolved = _resolve_callable(dep)
@@ -641,8 +717,9 @@ class FastAPIContainer:
                 active_scope=active_scope,
                 dep_scope=dep_scope,
                 request=request,
+                collected=collected,
             )
-        return ResolvedDependencies(instances)
+        return ResolvedDependencies(instances, collected)
 
     async def _resolve_single(
         self,
@@ -653,6 +730,7 @@ class FastAPIContainer:
         cache: bool = True,
         use_cache: bool = True,
         request: _LazyRequest | None = None,
+        collected: dict[Callable[..., Any], Any] | None = None,
     ) -> Any:
         """Recursively resolve a single dependency and all its sub-dependencies.
 
@@ -662,6 +740,9 @@ class FastAPIContainer:
         *request* is the memoised stub-connection factory shared across this
         resolution operation; the top-level call creates it when none is
         threaded in, and no stub is built unless a dependency needs one.
+        *collected*, when provided, records every instance resolved during the
+        operation (keyed by callable) so :class:`ResolvedDependencies` can
+        expose sub-dependencies; it never influences resolution or caching.
         """
         if request is None:
             request = _LazyRequest(self._build_request)
@@ -669,27 +750,8 @@ class FastAPIContainer:
 
         shared = cache and use_cache
         if shared and call in instances:
-            return instances[call]
-
-        if not shared:
-            return await self._instantiate(
-                call,
-                active_scope=active_scope,
-                dep_scope=dep_scope,
-                cache=cache,
-                use_cache=use_cache,
-                request=request,
-                exit_stack=exit_stack,
-            )
-
-        # Serialise concurrent resolutions of the same shared dependency: without
-        # this, two ``get``/``invoke`` racing on a cache miss would both build an
-        # instance and both enter the shared exit stack, leaking a duplicate and
-        # its teardown. Double-check the cache after acquiring the lock.
-        lock = locks.setdefault(call, asyncio.Lock())
-        async with lock:
-            if call in instances:
-                return instances[call]
+            instance = instances[call]
+        elif not shared:
             instance = await self._instantiate(
                 call,
                 active_scope=active_scope,
@@ -698,9 +760,34 @@ class FastAPIContainer:
                 use_cache=use_cache,
                 request=request,
                 exit_stack=exit_stack,
+                collected=collected,
             )
-            instances[call] = instance
-            return instance
+        else:
+            # Serialise concurrent resolutions of the same shared dependency:
+            # without this, two ``get``/``invoke`` racing on a cache miss would
+            # both build an instance and both enter the shared exit stack,
+            # leaking a duplicate and its teardown. Double-check the cache after
+            # acquiring the lock.
+            lock = locks.setdefault(call, asyncio.Lock())
+            async with lock:
+                if call in instances:
+                    instance = instances[call]
+                else:
+                    instance = await self._instantiate(
+                        call,
+                        active_scope=active_scope,
+                        dep_scope=dep_scope,
+                        cache=cache,
+                        use_cache=use_cache,
+                        request=request,
+                        exit_stack=exit_stack,
+                        collected=collected,
+                    )
+                    instances[call] = instance
+
+        if collected is not None:
+            collected[call] = instance
+        return instance
 
     async def _instantiate(
         self,
@@ -712,11 +799,14 @@ class FastAPIContainer:
         use_cache: bool,
         request: _LazyRequest,
         exit_stack: AsyncExitStack,
+        collected: dict[Callable[..., Any], Any] | None = None,
     ) -> Any:
         """Build *call*'s instance, resolving sub-dependencies and injecting stub
         request/response/param values; teardown is registered on *exit_stack*.
 
         Always constructs a fresh instance — caching is the caller's concern.
+        *collected* is threaded into sub-dependency resolution so they too are
+        recorded for :class:`ResolvedDependencies`.
         """
         # Apply overrides: if the original callable has an override, use it instead.
         effective_call = self._apply_overrides(call)
@@ -752,6 +842,7 @@ class FastAPIContainer:
                 dep_scope=sub_scope,
                 use_cache=getattr(sub_dep, "use_cache", True),
                 request=request,
+                collected=collected,
             )
             if sub_dep.name is not None:
                 sub_values[sub_dep.name] = sub_instance
@@ -906,10 +997,26 @@ class ResolutionScope:
 
     async def invoke(self, call: Callable[..., Any]) -> Any:
         """Resolve *call*'s dependencies within this scope and invoke it."""
+        return (await self.invoke_resolved(call)).get(call)
+
+    async def invoke_resolved(self, call: Callable[..., Any]) -> ResolvedDependencies:
+        """Resolve and invoke *call*, returning the resolved dependencies.
+
+        The returned bag's :meth:`~ResolvedDependencies.get` for *call* yields
+        the invocation result, while its ``*_transitive`` accessors and
+        :meth:`~ResolvedDependencies.all_instances` expose every sub-dependency
+        resolved for the call.
+        """
+        collected: dict[Callable[..., Any], Any] = {}
         dep_scope = self._container._scope_of(call, call, None)
-        return await self._container._resolve_single(
-            call, active_scope=self, dep_scope=dep_scope, cache=False
+        instance = await self._container._resolve_single(
+            call,
+            active_scope=self,
+            dep_scope=dep_scope,
+            cache=False,
+            collected=collected,
         )
+        return ResolvedDependencies({_resolve_callable(call): instance}, collected)
 
 
 def get_container(
