@@ -234,6 +234,13 @@ async def main() -> None:
     assert await container.invoke(handler) == (42, 10, "hello")
 ```
 
+A dependency declaring `scopes: SecurityScopes` is served the same way: pass
+`security_scopes=["me", "items"]` to the container and it receives a
+`SecurityScopes` carrying those scopes (empty when unset). The value is global
+to the container — the per-branch scopes a parent grants via
+`Security(dep, scopes=[...])` are not reconstructed, since standalone has no
+request chain to accumulate them along.
+
 Each source (`query`, `path`, `headers`, `cookies`) accepts either a bare
 `{name: value}` mapping or a `ParamSource(values=..., default=...)`. Resolution,
 per parameter, is: an explicit value (by name, then alias) → the parameter's own
@@ -405,7 +412,14 @@ declaring `response: Response` receives a fresh stub whose header/cookie/status
 mutations are accepted but have no transport effect (nothing sends it). A
 dependency declaring `background_tasks: BackgroundTasks` receives a real
 `BackgroundTasks`; tasks added with `add_task(...)` run when the owning scope
-closes (`aclose()` for `CONTAINER`, scope exit for `SCOPED`).
+closes (`aclose()` for `CONTAINER`, scope exit for `SCOPED`). A dependency
+declaring `scopes: SecurityScopes` receives a `SecurityScopes` built from the
+container's `security_scopes=` configuration (empty by default) — supplied the
+same way as query/header/cookie values, since standalone there is no
+security-scheme chain to accumulate scopes from. Authentication is not enforced
+(there is no transport): a security scheme such as `OAuth2PasswordBearer` still
+runs as an ordinary dependency and reads the stub `Request`, so supply an
+`Authorization` header via `headers={...}` if you want it to succeed.
 
 ## Requirements
 

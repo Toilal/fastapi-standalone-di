@@ -39,7 +39,7 @@ fresh at each injection point (``False``).
 
 import asyncio
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -51,6 +51,7 @@ from fastapi import BackgroundTasks, Depends, Response
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
+from fastapi.security import SecurityScopes
 from starlette.datastructures import State
 from starlette.requests import Request
 
@@ -350,8 +351,9 @@ class FastAPIContainer:
 
     Encapsulates the configuration needed to resolve a dependency tree:
     application state, dependency overrides, introspection cache, the
-    :class:`DependencyScope` policy, and the query/path/header/cookie parameter
-    values to supply outside ASGI (see :class:`ParamSource`).
+    :class:`DependencyScope` policy, the query/path/header/cookie parameter
+    values to supply outside ASGI (see :class:`ParamSource`), and the security
+    scopes to expose to any ``SecurityScopes`` parameter.
 
     Example::
 
@@ -380,6 +382,7 @@ class FastAPIContainer:
         path: ParamSourceArg | None = None,
         headers: ParamSourceArg | None = None,
         cookies: ParamSourceArg | None = None,
+        security_scopes: Sequence[str] | None = None,
     ) -> None:
         self._app_state = app_state if app_state is not None else AppState.standalone()
         self._dependency_overrides = dependency_overrides or {}
@@ -388,6 +391,9 @@ class FastAPIContainer:
         self._path = _as_param_source(path)
         self._headers = _as_param_source(headers)
         self._cookies = _as_param_source(cookies)
+        self._security_scopes: list[str] = (
+            list(security_scopes) if security_scopes else []
+        )
 
         dc: DependantCache | None
         if isinstance(dependant_cache, DependantCache):
@@ -789,6 +795,23 @@ class FastAPIContainer:
             background_tasks = BackgroundTasks()
             sub_values[bg_param_name] = background_tasks
             exit_stack.push_async_callback(background_tasks)
+
+        # A dependency (typically a security dependency) may declare
+        # ``scopes: SecurityScopes``. In ASGI FastAPI fills it from the OAuth2
+        # scopes accumulated along the dependency chain; standalone there is no
+        # such chain, so inject a ``SecurityScopes`` carrying the container's
+        # configured scopes — supplied like query/header/cookie values rather
+        # than derived from a request (empty by default).
+        security_scopes_param_name = getattr(
+            dependant, "security_scopes_param_name", None
+        )
+        if (
+            security_scopes_param_name is not None
+            and security_scopes_param_name not in sub_values
+        ):
+            sub_values[security_scopes_param_name] = SecurityScopes(
+                scopes=list(self._security_scopes)
+            )
 
         for source_name, param_fields, config in (
             ("header", dependant.header_params, self._headers),
