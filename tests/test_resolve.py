@@ -107,17 +107,132 @@ async def plain_async_dep() -> str:
 # ---------------------------------------------------------------------------
 
 
+# --- diamond dependency graph: Diamond -> {Left, Right} -> Shared ----------
+
+
+class IShared(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class SharedDep(IShared):
+    def value(self) -> str:
+        return "shared"
+
+
+class ILeftDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class LeftDep(ILeftDep):
+    def __init__(self, shared: IShared = Depends(IShared)) -> None:
+        self.shared = shared
+
+    def value(self) -> str:
+        return "left"
+
+
+class IRightDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class RightDep(IRightDep):
+    def __init__(self, shared: IShared = Depends(IShared)) -> None:
+        self.shared = shared
+
+    def value(self) -> str:
+        return "right"
+
+
+class IDiamondDep(ABC, RegistrableDependency):
+    @abstractmethod
+    def value(self) -> str: ...
+
+
+class DiamondDep(IDiamondDep):
+    def __init__(
+        self,
+        left: ILeftDep = Depends(ILeftDep),
+        right: IRightDep = Depends(IRightDep),
+    ) -> None:
+        self.left = left
+        self.right = right
+
+    def value(self) -> str:
+        return "diamond"
+
+
+# --- SCOPED yield dependency behind an invoke() entry point ----------------
+
+_session_teardowns: list[object] = []
+
+
+class Session:
+    pass
+
+
+async def _session_factory() -> AsyncIterator[Session]:
+    session = Session()
+    yield session
+    _session_teardowns.append(session)
+
+
+def _handler_with_session(session: Session = Depends(_session_factory)) -> str:
+    return "handled"
+
+
 @pytest.fixture(autouse=True)
 def _register_deps() -> Iterator[None]:
     ILeafDep.register(LeafDep)
     IMiddleDep.register(MiddleDep)
     IRootDep.register(RootDep)
     IYieldDep.register(_yield_dep_factory)
+    IShared.register(SharedDep)
+    ILeftDep.register(LeftDep)
+    IRightDep.register(RightDep)
+    IDiamondDep.register(DiamondDep)
     yield
     ILeafDep.register(None)
     IMiddleDep.register(None)
     IRootDep.register(None)
     IYieldDep.register(None)
+    IShared.register(None)
+    ILeftDep.register(None)
+    IRightDep.register(None)
+    IDiamondDep.register(None)
+
+
+# --- use_cache=False fixtures ---------------------------------------------
+
+_fresh_counter = 0
+
+
+def fresh_dep() -> int:
+    """A dependency that yields a distinct value at every construction."""
+    global _fresh_counter
+    _fresh_counter += 1
+    return _fresh_counter
+
+
+def consumer_a(value: int = Depends(fresh_dep, use_cache=False)) -> int:
+    return value
+
+
+def consumer_b(value: int = Depends(fresh_dep, use_cache=False)) -> int:
+    return value
+
+
+def root_uncached(
+    a: int = Depends(consumer_a),
+    b: int = Depends(consumer_b),
+) -> tuple[int, int]:
+    return (a, b)
+
+
+def handler_with_deps(root: IRootDep = Depends(IRootDep)) -> str:
+    return root.value()
 
 
 # ---------------------------------------------------------------------------
@@ -508,3 +623,231 @@ class TestConcurrentResolution:
             )
             assert _slow_teardowns == 0
         assert _slow_teardowns == 1
+
+
+# --- exposing resolved sub-dependencies (#21) ------------------------------
+
+
+class TestResolvedSubDependencies:
+    async def test_all_instances_includes_sub_dependencies(self) -> None:
+        """all_instances() exposes the sub-deps resolved along the way."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        keys = set(deps.all_instances())
+        assert {RootDep, MiddleDep, LeafDep} <= keys
+
+    async def test_all_instances_across_multiple_top_level(self) -> None:
+        """A sub-dep shared by several top-level deps is reachable transitively."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep, IMiddleDep)
+        assert deps.get(IRootDep).value() == "root(middle(leaf))"
+        assert deps.get(IMiddleDep).value() == "middle(leaf)"
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert deps.get(ILeafDep, transitive=True) is deps.get(IMiddleDep).leaf
+
+    async def test_intermediate_cache_hit_walks_subtree(self) -> None:
+        """A cached middle node still contributes its sub-deps to a fresh parent."""
+        c = FastAPIContainer()
+        await c.resolve(IMiddleDep)  # cache Middle + Leaf
+        deps = await c.resolve(IRootDep)  # Root fresh, Middle is a cache hit here
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert deps.get(ILeafDep, transitive=True) is await c.get(ILeafDep)
+
+    async def test_empty_resolve_has_no_instances(self) -> None:
+        """Resolving nothing yields an empty instance set."""
+        deps = await FastAPIContainer().resolve()
+        assert dict(deps.all_instances()) == {}
+
+    async def test_keys_are_implementations_not_interfaces(self) -> None:
+        """all_instances() is keyed by resolved impls, not the interface."""
+        deps = await FastAPIContainer().resolve(IRootDep)
+        keys = set(deps.all_instances())
+        assert LeafDep in keys
+        assert ILeafDep not in keys
+
+    async def test_transitive_reaches_sub_dependencies(self) -> None:
+        """get(transitive=True) returns sub-dep instances by interface or impl."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        middle = deps.get(IMiddleDep, transitive=True)
+        leaf = deps.get(ILeafDep, transitive=True)
+        assert isinstance(middle, MiddleDep)
+        assert isinstance(leaf, LeafDep)
+
+    async def test_transitive_instances_are_the_ones_wired_in(self) -> None:
+        """The exposed sub-deps are identical to those injected into the parent."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        root = deps.get(IRootDep)
+        assert deps.get(IMiddleDep, transitive=True) is root.middle
+        assert deps.get(ILeafDep, transitive=True) is root.middle.leaf
+
+    async def test_get_stays_top_level_by_default(self) -> None:
+        """get()/optional() remain limited to the explicitly resolved deps."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        with pytest.raises(KeyError, match="Pass transitive=True"):
+            deps.get(IMiddleDep)
+        assert deps.optional(ILeafDep) is None
+
+    async def test_optional_transitive(self) -> None:
+        """optional(transitive=True) returns the sub-dep, or None when absent."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        assert deps.optional(ILeafDep, transitive=True) is not None
+        assert deps.optional(plain_sync_dep, transitive=True) is None
+
+    async def test_get_transitive_missing_raises(self) -> None:
+        """get(transitive=True) raises KeyError for a callable never resolved."""
+        c = FastAPIContainer()
+        deps = await c.resolve(ILeafDep)
+        with pytest.raises(KeyError, match="was not resolved"):
+            deps.get(IRootDep, transitive=True)
+
+    async def test_transitive_instance_matches_container_cache(self) -> None:
+        """A CONTAINER sub-dep exposed here is the same the container caches."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        cached_leaf = await c.get(ILeafDep)
+        assert deps.get(ILeafDep, transitive=True) is cached_leaf
+
+    async def test_transitive_survives_top_level_cache_hit(self) -> None:
+        """Sub-deps stay reachable when the whole tree is served from cache."""
+        c = FastAPIContainer()
+        await c.resolve(IRootDep)  # warm the cache
+        deps = await c.resolve(IRootDep)  # top-level cache hit, no re-instantiation
+        assert {RootDep, MiddleDep, LeafDep} <= set(deps.all_instances())
+        assert isinstance(deps.get(ILeafDep, transitive=True), LeafDep)
+
+    async def test_cache_hit_preserves_resolution_order(self) -> None:
+        """The cache-walk records sub-deps before their dependents, as a build does."""
+        c = FastAPIContainer()
+        await c.resolve(IRootDep)
+        deps = await c.resolve(IRootDep)
+        order = list(deps.all_instances())
+        assert order.index(LeafDep) < order.index(MiddleDep) < order.index(RootDep)
+
+    async def test_cache_hit_exposes_same_instances(self) -> None:
+        """Sub-deps exposed after a cache hit are the cached instances themselves."""
+        c = FastAPIContainer()
+        first = await c.resolve(IRootDep)
+        second = await c.resolve(IRootDep)
+        assert second.get(IMiddleDep, transitive=True) is first.get(
+            IMiddleDep, transitive=True
+        )
+        assert second.get(ILeafDep, transitive=True) is await c.get(ILeafDep)
+
+    async def test_all_instances_is_read_only(self) -> None:
+        """all_instances() returns an immutable view."""
+        c = FastAPIContainer()
+        deps = await c.resolve(ILeafDep)
+        view = deps.all_instances()
+        with pytest.raises(TypeError):
+            view[LeafDep] = object()  # type: ignore[index]
+
+    async def test_resolution_order_sub_deps_before_dependents(self) -> None:
+        """Instances are ordered sub-dependencies first, then their dependents."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IRootDep)
+        order = list(deps.all_instances())
+        assert order.index(LeafDep) < order.index(MiddleDep) < order.index(RootDep)
+
+    async def test_cache_hit_skips_uncached_transients(self) -> None:
+        """The cache-walk skips use_cache=False sub-deps absent from any cache."""
+        c = FastAPIContainer()
+        await c.resolve(root_uncached)  # build: fresh_dep transient is recorded
+        deps = await c.resolve(root_uncached)  # cache hit: walk can't recover it
+        keys = set(deps.all_instances())
+        assert {root_uncached, consumer_a, consumer_b} <= keys
+        assert fresh_dep not in keys
+
+    async def test_use_cache_false_keeps_last_built_duplicate(self) -> None:
+        """A use_cache=False sub-dep keeps only its last-built instance."""
+        c = FastAPIContainer()
+        deps = await c.resolve(root_uncached)
+        a_value = deps.get(consumer_a, transitive=True)
+        b_value = deps.get(consumer_b, transitive=True)
+        assert a_value != b_value  # distinct builds — resolution semantics intact
+        assert deps.get(fresh_dep, transitive=True) == b_value
+
+    async def test_backward_compatible_single_arg_construction(self) -> None:
+        """Constructing without the full map falls back to the top-level one."""
+        deps = ResolvedDependencies({LeafDep: LeafDep()})
+        assert deps.get(LeafDep, transitive=True) is deps.get(LeafDep)
+        assert set(deps.all_instances()) == {LeafDep}
+
+
+class TestInvokeResolved:
+    async def test_invoke_resolved_get_returns_call_result(self) -> None:
+        """The bag's get(call) yields the invocation result."""
+        c = FastAPIContainer()
+        deps = await c.invoke_resolved(handler_with_deps)
+        assert deps.get(handler_with_deps) == "root(middle(leaf))"
+
+    async def test_invoke_resolved_exposes_sub_dependencies(self) -> None:
+        """Sub-deps resolved for the call are reachable on the returned bag."""
+        c = FastAPIContainer()
+        deps = await c.invoke_resolved(handler_with_deps)
+        assert isinstance(deps.get(IRootDep, transitive=True), RootDep)
+        assert isinstance(deps.get(ILeafDep, transitive=True), LeafDep)
+
+    async def test_invoke_still_returns_result(self) -> None:
+        """invoke() keeps returning the plain call result."""
+        c = FastAPIContainer()
+        assert await c.invoke(handler_with_deps) == "root(middle(leaf))"
+
+    async def test_scope_invoke_resolved(self) -> None:
+        """ResolutionScope.invoke_resolved mirrors the container method."""
+        c = FastAPIContainer()
+        async with c.scope() as scope:
+            deps = await scope.invoke_resolved(handler_with_deps)
+        assert deps.get(handler_with_deps) == "root(middle(leaf))"
+        assert isinstance(deps.get(IMiddleDep, transitive=True), MiddleDep)
+
+
+class TestDiamondResolution:
+    async def test_shared_sub_dep_is_identical_across_branches(self) -> None:
+        """A diamond's shared leaf is one instance, reachable transitively."""
+        c = FastAPIContainer()
+        deps = await c.resolve(IDiamondDep)
+        shared = deps.get(IShared, transitive=True)
+        diamond = deps.get(IDiamondDep)
+        assert diamond.left.shared is shared
+        assert diamond.right.shared is shared
+
+    async def test_diamond_resolution_order(self) -> None:
+        """The shared dep is recorded before both branches, branches before root."""
+        deps = await FastAPIContainer().resolve(IDiamondDep)
+        order = list(deps.all_instances())
+        assert order.index(SharedDep) < order.index(LeftDep)
+        assert order.index(SharedDep) < order.index(RightDep)
+        assert order.index(LeftDep) < order.index(DiamondDep)
+        assert order.index(RightDep) < order.index(DiamondDep)
+
+    async def test_diamond_survives_cache_hit(self) -> None:
+        """After a cache hit, the walk dedups the shared dep yet exposes the tree."""
+        c = FastAPIContainer()
+        await c.resolve(IDiamondDep)  # warm the cache
+        deps = await c.resolve(IDiamondDep)  # cache hit → walk with shared-dep dedup
+        assert {SharedDep, LeftDep, RightDep, DiamondDep} <= set(deps.all_instances())
+        shared = deps.get(IShared, transitive=True)
+        assert deps.get(ILeftDep, transitive=True).shared is shared
+        assert deps.get(IRightDep, transitive=True).shared is shared
+
+
+class TestInvokeResolvedLifetime:
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> Iterator[None]:
+        _session_teardowns.clear()
+        yield
+        _session_teardowns.clear()
+
+    async def test_scoped_sub_dep_torn_down_but_still_referenced(self) -> None:
+        """A SCOPED sub-dep is torn down before invoke_resolved returns, yet the
+        bag still references the (now closed) instance — the documented caveat."""
+        c = FastAPIContainer(scopes={_session_factory: DependencyScope.SCOPED})
+        deps = await c.invoke_resolved(_handler_with_session)
+        assert deps.get(_handler_with_session) == "handled"
+        session = deps.get(_session_factory, transitive=True)
+        assert isinstance(session, Session)
+        assert session in _session_teardowns

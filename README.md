@@ -58,6 +58,7 @@ asyncio.run(main())
 - `container.resolve(a, b, ...)` — resolve several; returns a `ResolvedDependencies`
   you query with `.get(dep)` / `.optional(dep)`.
 - `container.invoke(fn)` — resolve `fn`'s `Depends()` parameters and call it (entry point, not cached).
+- `container.invoke_resolved(fn)` — like `invoke`, but returns a `ResolvedDependencies` exposing the sub-dependencies too (see [Inspecting resolved sub-dependencies](#inspecting-resolved-sub-dependencies)).
 - `container.scope()` — open a short-lived scope (see [Dependency scopes](#dependency-scopes)).
 
 ### Caching
@@ -75,6 +76,65 @@ dependency share one instance. FastAPI's `use_cache=False` on a `Depends(...)`
 opts that dependency out: it is rebuilt fresh at each injection point, while its
 `yield` teardown still runs on its scope's exit stack. `await container.aclose()`
 closes the container and runs any `yield` teardown.
+
+### Inspecting resolved sub-dependencies
+
+`resolve()` returns a `ResolvedDependencies` whose `get(dep)` / `optional(dep)`
+address the dependencies you explicitly asked for. The sub-dependencies resolved
+along the way are captured too: reach them by passing `transitive=True`, or
+iterate over the complete set with `all_instances()` (a read-only mapping,
+ordered sub-dependencies first). The instances returned are exactly those wired
+into their dependents.
+
+```python
+import asyncio
+
+from fastapi import Depends
+
+from fastapi_standalone_di import FastAPIContainer
+
+
+class Config:
+    url = "postgres://localhost/app"
+
+
+class Database:
+    def __init__(self, config: Config = Depends(Config)) -> None:
+        self.config = config
+
+
+class Service:
+    def __init__(self, db: Database = Depends(Database)) -> None:
+        self.db = db
+
+
+async def main() -> None:
+    async with FastAPIContainer() as container:
+        deps = await container.resolve(Service)
+
+        # get()/optional() address only the dependency you asked for:
+        service = deps.get(Service)
+
+        # sub-dependencies resolved along the way need transitive=True:
+        db = deps.get(Database, transitive=True)
+        config = deps.optional(Config, transitive=True)
+        assert db is service.db
+        assert config is service.db.config
+
+        # or iterate over every instance that was built:
+        assert set(deps.all_instances()) == {Service, Database, Config}
+
+
+asyncio.run(main())
+```
+
+`invoke_resolved(fn)` gives the same bag for an entry-point call: `get(fn)` is
+the invocation result, and the sub-dependencies are exposed the same way. As
+with `invoke`, `SCOPED` dependencies are torn down before it returns — the bag
+still references them, but their `yield` teardown has already run.
+
+A dependency injected with `use_cache=False` is rebuilt at each injection point;
+only its last-built instance is retained under its callable key.
 
 ### Concurrency
 
