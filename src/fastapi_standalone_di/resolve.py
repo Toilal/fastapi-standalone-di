@@ -185,7 +185,7 @@ except ImportError:  # pragma: no cover - pydantic v1
 try:
     from pydantic.fields import Undefined as _UndefinedV1  # type: ignore[attr-defined]
 
-    _REQUIRED_SENTINELS += (_UndefinedV1,)
+    _REQUIRED_SENTINELS += (_UndefinedV1,)  # pragma: no cover - pydantic v1
 except ImportError:  # pragma: no cover - pydantic v2
     pass
 

@@ -8,6 +8,7 @@ import pytest
 
 from fastapi_standalone_di import RegistrableDependency
 from fastapi_standalone_di.registration import (
+    _DEPENDS_SUPPORTS_SCOPE,
     _Depends,
     patch_for_registrable_dependency_support,
 )
@@ -41,6 +42,10 @@ class TestRegistration:
     def test_dependency_without_registration_raises(self) -> None:
         with pytest.raises(RuntimeError, match="No implementation registered"):
             IService.dependency()
+
+    def test_impl_without_registration_raises(self) -> None:
+        with pytest.raises(RuntimeError, match="No implementation registered"):
+            _ = IService.impl
 
     def test_register_none_clears(self) -> None:
         IService.register(ServiceImpl)
@@ -78,3 +83,31 @@ class TestDependsPatch:
 
         dep = _Depends(plain)
         assert dep.dependency is plain
+
+    def test_patched_depends_dereferences_at_construction(self) -> None:
+        IService.register(ServiceImpl)
+        original = fastapi.params.Depends
+        try:
+            patch_for_registrable_dependency_support()
+            dep = fastapi.params.Depends(IService)
+            assert isinstance(dep, _Depends)
+            assert dep.dependency is ServiceImpl
+        finally:
+            fastapi.params.Depends = original
+
+
+class TestDependsBehaviour:
+    def test_dependency_none_when_unset(self) -> None:
+        assert _Depends().dependency is None
+
+    def test_plain_class_is_returned_as_is(self) -> None:
+        class Plain:
+            pass
+
+        assert _Depends(Plain).dependency is Plain
+
+    def test_scope_and_use_cache_are_forwarded(self) -> None:
+        dep = _Depends(scope="request", use_cache=False)  # type: ignore[call-arg]
+        assert dep.use_cache is False
+        if _DEPENDS_SUPPORTS_SCOPE:
+            assert dep.scope == "request"  # type: ignore[attr-defined]

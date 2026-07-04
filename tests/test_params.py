@@ -10,6 +10,7 @@ from fastapi import Cookie, Header, Path, Query
 from fastapi_standalone_di import (
     FastAPIContainer,
     MissingParameterError,
+    ParameterError,
     ParameterValidationError,
     ParamSource,
 )
@@ -68,6 +69,25 @@ class TestExplicitValues:
             await container.invoke(handler)
         assert exc.value.source == "path"
         assert exc.value.name == "user_id"
+
+
+class TestParameterErrorHierarchy:
+    async def test_missing_is_a_parameter_error(self) -> None:
+        def handler(q: str = Query(...)) -> str:
+            return q
+
+        with pytest.raises(ParameterError):
+            await FastAPIContainer().invoke(handler)
+        with pytest.raises(MissingParameterError):
+            await FastAPIContainer().invoke(handler)
+
+    async def test_validation_is_a_parameter_error(self) -> None:
+        def handler(user_id: int = Path(...)) -> int:
+            return user_id
+
+        container = FastAPIContainer(path={"user_id": "notanint"})
+        with pytest.raises(ParameterError):
+            await container.invoke(handler)
 
 
 class TestDeclaredDefaults:
