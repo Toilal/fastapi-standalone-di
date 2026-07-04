@@ -552,12 +552,12 @@ class TestResolvedSubDependencies:
         keys = set(deps.all_instances())
         assert {RootDep, MiddleDep, LeafDep} <= keys
 
-    async def test_get_transitive_reaches_sub_dependencies(self) -> None:
-        """get_transitive() returns sub-dep instances by interface or impl."""
+    async def test_transitive_reaches_sub_dependencies(self) -> None:
+        """get(transitive=True) returns sub-dep instances by interface or impl."""
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
-        middle = deps.get_transitive(IMiddleDep)
-        leaf = deps.get_transitive(ILeafDep)
+        middle = deps.get(IMiddleDep, transitive=True)
+        leaf = deps.get(ILeafDep, transitive=True)
         assert isinstance(middle, MiddleDep)
         assert isinstance(leaf, LeafDep)
 
@@ -566,37 +566,37 @@ class TestResolvedSubDependencies:
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
         root = deps.get(IRootDep)
-        assert deps.get_transitive(IMiddleDep) is root.middle
-        assert deps.get_transitive(ILeafDep) is root.middle.leaf
+        assert deps.get(IMiddleDep, transitive=True) is root.middle
+        assert deps.get(ILeafDep, transitive=True) is root.middle.leaf
 
-    async def test_get_stays_top_level_only(self) -> None:
+    async def test_get_stays_top_level_by_default(self) -> None:
         """get()/optional() remain limited to the explicitly resolved deps."""
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
-        with pytest.raises(KeyError, match="Use get_transitive"):
+        with pytest.raises(KeyError, match="Pass transitive=True"):
             deps.get(IMiddleDep)
         assert deps.optional(ILeafDep) is None
 
     async def test_optional_transitive(self) -> None:
-        """optional_transitive() returns the sub-dep, or None when absent."""
+        """optional(transitive=True) returns the sub-dep, or None when absent."""
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
-        assert deps.optional_transitive(ILeafDep) is not None
-        assert deps.optional_transitive(plain_sync_dep) is None
+        assert deps.optional(ILeafDep, transitive=True) is not None
+        assert deps.optional(plain_sync_dep, transitive=True) is None
 
     async def test_get_transitive_missing_raises(self) -> None:
-        """get_transitive() raises KeyError for a callable never resolved."""
+        """get(transitive=True) raises KeyError for a callable never resolved."""
         c = FastAPIContainer()
         deps = await c.resolve(ILeafDep)
-        with pytest.raises(KeyError, match="not resolved as part of this operation"):
-            deps.get_transitive(IRootDep)
+        with pytest.raises(KeyError, match="was not resolved"):
+            deps.get(IRootDep, transitive=True)
 
     async def test_transitive_instance_matches_container_cache(self) -> None:
         """A CONTAINER sub-dep exposed here is the same the container caches."""
         c = FastAPIContainer()
         deps = await c.resolve(IRootDep)
         cached_leaf = await c.get(ILeafDep)
-        assert deps.get_transitive(ILeafDep) is cached_leaf
+        assert deps.get(ILeafDep, transitive=True) is cached_leaf
 
     async def test_all_instances_is_read_only(self) -> None:
         """all_instances() returns an immutable view."""
@@ -617,15 +617,15 @@ class TestResolvedSubDependencies:
         """A use_cache=False sub-dep keeps only its last-built instance."""
         c = FastAPIContainer()
         deps = await c.resolve(root_uncached)
-        a_value = deps.get_transitive(consumer_a)
-        b_value = deps.get_transitive(consumer_b)
+        a_value = deps.get(consumer_a, transitive=True)
+        b_value = deps.get(consumer_b, transitive=True)
         assert a_value != b_value  # distinct builds — resolution semantics intact
-        assert deps.get_transitive(fresh_dep) == b_value
+        assert deps.get(fresh_dep, transitive=True) == b_value
 
     async def test_backward_compatible_single_arg_construction(self) -> None:
         """Constructing without the full map falls back to the top-level one."""
         deps = ResolvedDependencies({LeafDep: LeafDep()})
-        assert deps.get_transitive(LeafDep) is deps.get(LeafDep)
+        assert deps.get(LeafDep, transitive=True) is deps.get(LeafDep)
         assert set(deps.all_instances()) == {LeafDep}
 
 
@@ -640,8 +640,8 @@ class TestInvokeResolved:
         """Sub-deps resolved for the call are reachable on the returned bag."""
         c = FastAPIContainer()
         deps = await c.invoke_resolved(handler_with_deps)
-        assert isinstance(deps.get_transitive(IRootDep), RootDep)
-        assert isinstance(deps.get_transitive(ILeafDep), LeafDep)
+        assert isinstance(deps.get(IRootDep, transitive=True), RootDep)
+        assert isinstance(deps.get(ILeafDep, transitive=True), LeafDep)
 
     async def test_invoke_still_returns_result(self) -> None:
         """invoke() keeps returning the plain call result."""
@@ -654,4 +654,4 @@ class TestInvokeResolved:
         async with c.scope() as scope:
             deps = await scope.invoke_resolved(handler_with_deps)
         assert deps.get(handler_with_deps) == "root(middle(leaf))"
-        assert isinstance(deps.get_transitive(IMiddleDep), MiddleDep)
+        assert isinstance(deps.get(IMiddleDep, transitive=True), MiddleDep)

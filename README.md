@@ -81,10 +81,10 @@ closes the container and runs any `yield` teardown.
 
 `resolve()` returns a `ResolvedDependencies` whose `get(dep)` / `optional(dep)`
 address the dependencies you explicitly asked for. The sub-dependencies resolved
-along the way are captured too: reach them with `get_transitive(dep)` /
-`optional_transitive(dep)`, or iterate over the complete set with
-`all_instances()` (a read-only mapping, ordered sub-dependencies first). The
-instances returned are exactly those wired into their dependents.
+along the way are captured too: reach them by passing `transitive=True`, or
+iterate over the complete set with `all_instances()` (a read-only mapping,
+ordered sub-dependencies first). The instances returned are exactly those wired
+into their dependents.
 
 ```python
 import asyncio
@@ -115,9 +115,9 @@ async def main() -> None:
         # get()/optional() address only the dependency you asked for:
         service = deps.get(Service)
 
-        # sub-dependencies resolved along the way are exposed separately:
-        db = deps.get_transitive(Database)
-        config = deps.optional_transitive(Config)
+        # sub-dependencies resolved along the way need transitive=True:
+        db = deps.get(Database, transitive=True)
+        config = deps.optional(Config, transitive=True)
         assert db is service.db
         assert config is service.db.config
 

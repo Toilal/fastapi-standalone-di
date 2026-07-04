@@ -297,9 +297,10 @@ class ResolvedDependencies:
 
     :meth:`get` / :meth:`optional` address only the **top-level** dependencies
     explicitly passed to :meth:`FastAPIContainer.resolve` (or the entry point of
-    :meth:`FastAPIContainer.invoke_resolved`). The sub-dependencies resolved
-    along the way are also captured and reachable through the ``transitive``
-    accessors and :meth:`all_instances`, keyed by their resolved callable.
+    :meth:`FastAPIContainer.invoke_resolved`). Pass ``transitive=True`` to widen
+    the lookup to the sub-dependencies resolved along the way, or iterate over
+    the complete set with :meth:`all_instances`; everything is keyed by its
+    resolved callable.
 
     A dependency injected with FastAPI's ``use_cache=False`` is rebuilt fresh at
     each injection point; only the last instance built during the operation is
@@ -318,28 +319,32 @@ class ResolvedDependencies:
         self._all = all_instances if all_instances is not None else instances
 
     @overload
-    def get[T](self, dependency: type[T]) -> T: ...
+    def get[T](self, dependency: type[T], *, transitive: bool = False) -> T: ...
 
     @overload
-    def get[T](self, dependency: Callable[..., T]) -> T: ...
+    def get[T](
+        self, dependency: Callable[..., T], *, transitive: bool = False
+    ) -> T: ...
 
-    def get(self, dependency: Callable[..., Any]) -> Any:
-        """Retrieve a top-level resolved dependency by its type or callable.
+    def get(self, dependency: Callable[..., Any], *, transitive: bool = False) -> Any:
+        """Retrieve a resolved dependency by its type or callable.
 
-        Raises :class:`KeyError` if the dependency was not resolved. Only
-        top-level dependencies are addressable — use :meth:`get_transitive` to
-        reach a sub-dependency.
+        By default only the **top-level** dependencies (those explicitly passed
+        to :meth:`FastAPIContainer.resolve`) are addressable. Pass
+        ``transitive=True`` to also reach a sub-dependency resolved along the
+        way. Raises :class:`KeyError` if the dependency was not resolved.
         """
         key = _resolve_callable(dependency)
+        source = self._all if transitive else self._instances
         try:
-            return self._instances[key]
+            return source[key]
         except KeyError:
             name = getattr(dependency, "__qualname__", repr(dependency))
             module = getattr(dependency, "__module__", "?")
-            if key in self._all:
+            if not transitive and key in self._all:
                 raise KeyError(
                     f"Dependency {module}.{name} was resolved as a sub-dependency, "
-                    "not a top-level one. Use get_transitive() to retrieve it."
+                    "not a top-level one. Pass transitive=True to retrieve it."
                 ) from None
             raise KeyError(
                 f"Dependency {module}.{name} was not resolved. "
@@ -347,51 +352,26 @@ class ResolvedDependencies:
             ) from None
 
     @overload
-    def optional[T](self, dependency: type[T]) -> T | None: ...
+    def optional[T](
+        self, dependency: type[T], *, transitive: bool = False
+    ) -> T | None: ...
 
     @overload
-    def optional[T](self, dependency: Callable[..., T]) -> T | None: ...
+    def optional[T](
+        self, dependency: Callable[..., T], *, transitive: bool = False
+    ) -> T | None: ...
 
-    def optional(self, dependency: Callable[..., Any]) -> Any | None:
-        """Retrieve a top-level resolved dependency, or ``None`` if not resolved."""
-        key = _resolve_callable(dependency)
-        return self._instances.get(key)
+    def optional(
+        self, dependency: Callable[..., Any], *, transitive: bool = False
+    ) -> Any | None:
+        """Retrieve a resolved dependency, or ``None`` if not resolved.
 
-    @overload
-    def get_transitive[T](self, dependency: type[T]) -> T: ...
-
-    @overload
-    def get_transitive[T](self, dependency: Callable[..., T]) -> T: ...
-
-    def get_transitive(self, dependency: Callable[..., Any]) -> Any:
-        """Retrieve any instance resolved during the operation, sub-deps included.
-
-        Unlike :meth:`get`, this searches the full set of instances built while
-        resolving the tree — top-level dependencies **and** their
-        sub-dependencies. Raises :class:`KeyError` if the callable was not
-        resolved at all.
+        As with :meth:`get`, ``transitive=True`` widens the lookup to
+        sub-dependencies resolved along the way.
         """
         key = _resolve_callable(dependency)
-        try:
-            return self._all[key]
-        except KeyError:
-            name = getattr(dependency, "__qualname__", repr(dependency))
-            module = getattr(dependency, "__module__", "?")
-            raise KeyError(
-                f"Dependency {module}.{name} was not resolved as part of this "
-                "operation."
-            ) from None
-
-    @overload
-    def optional_transitive[T](self, dependency: type[T]) -> T | None: ...
-
-    @overload
-    def optional_transitive[T](self, dependency: Callable[..., T]) -> T | None: ...
-
-    def optional_transitive(self, dependency: Callable[..., Any]) -> Any | None:
-        """Retrieve any resolved instance (sub-deps included), or ``None``."""
-        key = _resolve_callable(dependency)
-        return self._all.get(key)
+        source = self._all if transitive else self._instances
+        return source.get(key)
 
     def all_instances(self) -> Mapping[Callable[..., Any], Any]:
         """Return a read-only view of every instance resolved in this operation.
@@ -1008,7 +988,7 @@ class ResolutionScope:
         """Resolve and invoke *call*, returning the resolved dependencies.
 
         The returned bag's :meth:`~ResolvedDependencies.get` for *call* yields
-        the invocation result, while its ``*_transitive`` accessors and
+        the invocation result, while ``get(dep, transitive=True)`` and
         :meth:`~ResolvedDependencies.all_instances` expose every sub-dependency
         resolved for the call.
         """
