@@ -9,6 +9,13 @@ request/response cycle. `fastapi-standalone-di` reuses that exact machinery
 dependencies from plain Python: CLI scripts, workers, cron jobs, tests — no HTTP
 server required.
 
+## Documentation
+
+Full documentation is published at
+**<https://toilal.github.io/fastapi-standalone-di>**. The in-development docs
+(built from `develop`) are previewed at
+<https://toilal.github.io/fastapi-standalone-di/dev/>.
+
 ## Install
 
 ```bash
