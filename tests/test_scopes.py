@@ -1,5 +1,6 @@
 """Tests for the dependency-scope system (CONTAINER vs SCOPED)."""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
@@ -188,6 +189,24 @@ class TestScopeConfiguration:
         with pytest.raises(ScopeError):
             await FastAPIContainer(default_scope={None: SCOPED}).get(ServiceA)
 
+    async def test_default_scope_dict_without_matching_key_falls_back(self) -> None:
+        # The dict has no None key; a top-level dep (FastAPI scope None) must
+        # fall back to the hard-coded CONTAINER default rather than KeyError.
+        c = FastAPIContainer(default_scope={"function": SCOPED})
+        assert isinstance(await c.get(ServiceA), ServiceA)
+
+    @pytest.mark.skipif(
+        not _DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
+    )
+    async def test_default_scope_dict_subdep_scope_absent_falls_back(self) -> None:
+        # get_conn carries scope="request", absent from the dict -> fall back to
+        # the None entry (CONTAINER) for the sub-dependency too.
+        def parent(conn: Conn = Depends(get_conn, scope="request")) -> Conn:  # type: ignore[call-arg]
+            return conn
+
+        c = FastAPIContainer(default_scope={None: CONTAINER})
+        assert isinstance(await c.get(parent), Conn)  # type: ignore[arg-type]
+
     @pytest.mark.skipif(
         not _DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
     )
@@ -220,6 +239,87 @@ class TestScopeConfiguration:
                 assert (await s.get(IThing)).v() == "thing"
         finally:
             IThing.register(None)
+
+
+class _Boom(RuntimeError):
+    pass
+
+
+class ServiceRaisingAfterConn:
+    """Depends on an already-entered yield generator, then blows up."""
+
+    def __init__(self, conn: Conn = Depends(get_conn)) -> None:
+        raise _Boom("init failed after conn was opened")
+
+
+class TestTeardownOnError:
+    async def test_container_teardown_runs_when_dependent_raises(self) -> None:
+        """A yield dep entered before a sibling/consumer raises is still closed."""
+        c = FastAPIContainer()
+        with pytest.raises(_Boom):
+            await c.get(ServiceRaisingAfterConn)
+        assert _Counter.n_open == 1
+        # The generator is entered on the container stack; teardown defers to aclose.
+        assert _Counter.n_close == 0
+        await c.aclose()
+        assert _Counter.n_close == 1
+        assert _Counter.live == 0
+
+    async def test_scope_teardown_runs_when_dependent_raises(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+        with pytest.raises(_Boom):
+            async with c.scope() as s:
+                await s.get(ServiceRaisingAfterConn)
+        assert _Counter.n_open == 1
+        assert _Counter.n_close == 1
+        assert _Counter.live == 0
+
+    async def test_invoke_teardown_runs_when_handler_raises(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+
+        def handler(conn: Conn = Depends(get_conn)) -> None:
+            raise _Boom("handler failed after conn was opened")
+
+        with pytest.raises(_Boom):
+            await c.invoke(handler)
+        assert _Counter.n_open == 1
+        assert _Counter.n_close == 1
+        assert _Counter.live == 0
+
+
+class TestScopeOptional:
+    async def test_optional_returns_resolved_instance(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+        async with c.scope() as s:
+            resolved = await s.optional(ServiceA)
+            assert isinstance(resolved, ServiceA)
+
+    async def test_optional_returns_none_for_unrelated_dependency(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+        async with c.scope() as s:
+            deps = await s.resolve(ServiceA)
+            assert deps.optional(ServiceB) is None
+
+
+class TestScopedUseCache:
+    async def test_use_cache_false_yields_fresh_within_a_scope(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+        async with c.scope() as s:
+            svc = await s.get(ServiceFreshConns)
+            assert svc.c1 is not svc.c2
+            assert _Counter.n_open == 2
+            assert _Counter.live == 2
+        assert _Counter.n_close == 2
+        assert _Counter.live == 0
+
+    async def test_concurrent_scoped_resolution_shares_one_instance(self) -> None:
+        c = FastAPIContainer(default_scope=SCOPED)
+        async with c.scope() as s:
+            a, b = await asyncio.gather(s.get(ServiceA), s.get(ServiceB))
+            # Both resolutions race on the same scoped get_conn: the lock must
+            # serialise them so a single connection is opened and shared.
+            assert a.conn is b.conn
+            assert _Counter.n_open == 1
 
 
 class TestCaptiveDependency:

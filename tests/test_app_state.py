@@ -65,6 +65,29 @@ class TestStandaloneMode:
         assert AppState.standalone().get("cache") == 42
 
 
+class TestAsState:
+    def test_standalone_state_shares_store_both_ways(self) -> None:
+        state = AppState.standalone()
+        state.set("db", "value")
+
+        exposed = state.as_state()
+        assert exposed.db == "value"
+
+        # Writes on the returned State are visible through the AppState, and
+        # set_app_state_value keeps the same State in sync.
+        exposed.cache = 7
+        assert state.get("cache") == 7
+        set_app_state_value("extra", "x")
+        assert exposed.extra == "x"
+
+    def test_request_state_returns_the_underlying_state(self) -> None:
+        app = FastAPI()
+        app.state.db = "from-app"
+        state = AppState.from_app(app)
+
+        assert state.as_state() is app.state
+
+
 class TestRequestMode:
     def test_from_request_reads_app_state(self) -> None:
         app = FastAPI()
@@ -101,6 +124,10 @@ class TestRequestMode:
         state.delete("db")
 
         assert state.get("db") is None
+
+    def test_delete_missing_key_is_noop(self) -> None:
+        app = FastAPI()
+        AppState.from_app(app).delete("missing")  # must not raise
 
     def test_delete_does_not_touch_standalone(self) -> None:
         set_app_state_value("db", "global")

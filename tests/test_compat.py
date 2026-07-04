@@ -36,6 +36,16 @@ class _AsyncCallableClass:
         return "x"
 
 
+class _GenCallableClass:
+    def __call__(self) -> Iterator[str]:
+        yield "x"
+
+
+class _AsyncGenCallableClass:
+    async def __call__(self) -> AsyncIterator[str]:
+        yield "x"
+
+
 class TestIsCoroutineCallable:
     def test_true_for_coroutine(self) -> None:
         assert is_coroutine_callable(_coro_fn) is True
@@ -49,6 +59,9 @@ class TestIsCoroutineCallable:
     def test_true_for_async_dunder_call(self) -> None:
         assert is_coroutine_callable(_AsyncCallableClass()) is True
 
+    def test_false_for_sync_dunder_call(self) -> None:
+        assert is_coroutine_callable(_CallableClass()) is False
+
     def test_unwraps_partial(self) -> None:
         assert is_coroutine_callable(functools.partial(_coro_fn)) is True
 
@@ -60,6 +73,12 @@ class TestIsGenCallable:
     def test_false_for_plain(self) -> None:
         assert is_gen_callable(_sync_fn) is False
 
+    def test_true_for_gen_dunder_call(self) -> None:
+        assert is_gen_callable(_GenCallableClass()) is True
+
+    def test_unwraps_partial(self) -> None:
+        assert is_gen_callable(functools.partial(_gen_fn)) is True
+
 
 class TestIsAsyncGenCallable:
     def test_true_for_async_generator(self) -> None:
@@ -67,3 +86,9 @@ class TestIsAsyncGenCallable:
 
     def test_false_for_coroutine(self) -> None:
         assert is_async_gen_callable(_coro_fn) is False
+
+    def test_true_for_async_gen_dunder_call(self) -> None:
+        assert is_async_gen_callable(_AsyncGenCallableClass()) is True
+
+    def test_unwraps_partial(self) -> None:
+        assert is_async_gen_callable(functools.partial(_async_gen_fn)) is True
