@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from http.cookies import SimpleCookie
 from types import MappingProxyType
-from typing import Any, cast, overload
+from typing import Any, TypeVar, cast, overload
 from urllib.parse import urlencode
 
 from fastapi import BackgroundTasks, Depends, Response
@@ -63,6 +63,8 @@ from fastapi_standalone_di._compat import (
 )
 from fastapi_standalone_di.app_state import AppState, get_app_state
 from fastapi_standalone_di.registration import RegistrableDependency
+
+T = TypeVar("T")
 
 
 class _StubApp:
@@ -319,12 +321,10 @@ class ResolvedDependencies:
         self._all = all_instances if all_instances is not None else instances
 
     @overload
-    def get[T](self, dependency: type[T], *, transitive: bool = False) -> T: ...
+    def get(self, dependency: type[T], *, transitive: bool = False) -> T: ...
 
     @overload
-    def get[T](
-        self, dependency: Callable[..., T], *, transitive: bool = False
-    ) -> T: ...
+    def get(self, dependency: Callable[..., T], *, transitive: bool = False) -> T: ...
 
     def get(self, dependency: Callable[..., Any], *, transitive: bool = False) -> Any:
         """Retrieve a resolved dependency by its type or callable.
@@ -357,12 +357,12 @@ class ResolvedDependencies:
             ) from None
 
     @overload
-    def optional[T](
+    def optional(
         self, dependency: type[T], *, transitive: bool = False
     ) -> T | None: ...
 
     @overload
-    def optional[T](
+    def optional(
         self, dependency: Callable[..., T], *, transitive: bool = False
     ) -> T | None: ...
 
@@ -495,10 +495,10 @@ class FastAPIContainer:
         return ResolutionScope(self)
 
     @overload
-    async def get[T](self, dependency: type[T]) -> T: ...
+    async def get(self, dependency: type[T]) -> T: ...
 
     @overload
-    async def get[T](self, dependency: Callable[..., T]) -> T: ...
+    async def get(self, dependency: Callable[..., T]) -> T: ...
 
     async def get(self, dependency: Callable[..., Any]) -> Any:
         """Resolve a single dependency and return its instance directly."""
@@ -506,10 +506,10 @@ class FastAPIContainer:
         return deps.get(dependency)
 
     @overload
-    async def optional[T](self, dependency: type[T]) -> T | None: ...
+    async def optional(self, dependency: type[T]) -> T | None: ...
 
     @overload
-    async def optional[T](self, dependency: Callable[..., T]) -> T | None: ...
+    async def optional(self, dependency: Callable[..., T]) -> T | None: ...
 
     async def optional(self, dependency: Callable[..., Any]) -> Any | None:
         """Resolve a single dependency, returning ``None`` if not resolved."""
@@ -1001,10 +1001,10 @@ class ResolutionScope:
         await self._scope_stack.aclose()
 
     @overload
-    async def get[T](self, dependency: type[T]) -> T: ...
+    async def get(self, dependency: type[T]) -> T: ...
 
     @overload
-    async def get[T](self, dependency: Callable[..., T]) -> T: ...
+    async def get(self, dependency: Callable[..., T]) -> T: ...
 
     async def get(self, dependency: Callable[..., Any]) -> Any:
         """Resolve a single dependency within this scope."""
@@ -1012,10 +1012,10 @@ class ResolutionScope:
         return deps.get(dependency)
 
     @overload
-    async def optional[T](self, dependency: type[T]) -> T | None: ...
+    async def optional(self, dependency: type[T]) -> T | None: ...
 
     @overload
-    async def optional[T](self, dependency: Callable[..., T]) -> T | None: ...
+    async def optional(self, dependency: Callable[..., T]) -> T | None: ...
 
     async def optional(self, dependency: Callable[..., Any]) -> Any | None:
         """Resolve a single dependency within this scope, or ``None``."""
