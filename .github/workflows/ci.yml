@@ -9,6 +9,9 @@ jobs:
   ci:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     name: Python ${{ matrix.python-version }}
 
@@ -31,10 +34,12 @@ jobs:
         run: uv sync --locked --no-dev --group test
 
       - name: Test
-        run: uv run --no-sync pytest --cov=fastapi_standalone_di
+        run: uv run --no-sync pytest --cov=fastapi_standalone_di --cov-report=xml
 
       - name: Codecov
         uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
 
   fastapi-compat:
     # Test against FastAPI versions around each key internal-API change, from
