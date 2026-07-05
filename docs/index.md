@@ -1,6 +1,12 @@
 fastapi-standalone-di
 =====================
 
+[![Latest Version](https://img.shields.io/pypi/v/fastapi-standalone-di.svg)](https://pypi.python.org/pypi/fastapi-standalone-di)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Toilal/fastapi-standalone-di/blob/develop/LICENSE)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/Toilal/fastapi-standalone-di/ci.yml?branch=develop)](https://github.com/Toilal/fastapi-standalone-di/actions/workflows/ci.yml)
+[![Codecov](https://img.shields.io/codecov/c/github/Toilal/fastapi-standalone-di)](https://codecov.io/gh/Toilal/fastapi-standalone-di)
+[![semantic-release](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/relekang/python-semantic-release)
+
 Use [FastAPI](https://fastapi.tiangolo.com/)'s dependency injection **outside of
 any web/ASGI context**.
 
