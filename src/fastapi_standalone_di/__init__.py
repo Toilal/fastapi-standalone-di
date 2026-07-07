@@ -25,7 +25,7 @@ from fastapi_standalone_di.resolve import (
     get_container,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AppState",

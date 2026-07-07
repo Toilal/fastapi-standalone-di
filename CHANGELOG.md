@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-07-07)
+
+### Features
+
+- Discover per-package di.py modules to auto-register bindings
+  ([#37](https://github.com/Toilal/fastapi-standalone-di/pull/37),
+  [`02fc05b`](https://github.com/Toilal/fastapi-standalone-di/commit/02fc05bd52b65a02b8cd3de5c740e80ef7000007))
+
+
 ## v0.2.0 (2026-07-05)
 
 ### Features
