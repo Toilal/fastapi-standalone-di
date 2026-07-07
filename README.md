@@ -53,8 +53,9 @@ asyncio.run(main())
 ```
 
 Sub-dependencies, `yield` teardown, caching, scopes, dependency overrides,
-registrable interfaces, shared app state, standalone `Request`/`Response` stubs,
-and query/path/header/cookie parameters are all covered in the documentation.
+registrable interfaces, per-package binding discovery, shared app state,
+standalone `Request`/`Response` stubs, and query/path/header/cookie parameters
+are all covered in the documentation.
 
 ## Documentation
 
