@@ -922,6 +922,7 @@ affects <code>Depends()</code> objects created afterwards.</p>
 <h2 id="discovering-bindings">Discovering bindings<a class="headerlink" href="#discovering-bindings" title="Permanent link">&para;</a></h2>
 <p>In a feature-oriented codebase, each feature binds its interfaces to their
 implementations in a per-feature <code>di</code> module:</p>
+<!-- docs-test: skip -->
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># myapp/features/orders/di.py</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">register</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">OrderService</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">DefaultOrderService</span><span class="p">)</span>
