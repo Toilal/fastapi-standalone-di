@@ -1,6 +1,8 @@
 API reference
 =============
 
+<!-- docs-test: skip-file (reference signatures, not runnable modules) -->
+
 Every public symbol is exported from the top-level `fastapi_standalone_di`
 package:
 

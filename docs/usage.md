@@ -277,6 +277,7 @@ Discovering bindings
 In a feature-oriented codebase, each feature binds its interfaces to their
 implementations in a per-feature `di` module:
 
+<!-- docs-test: skip -->
 ```python
 # myapp/features/orders/di.py
 def register() -> None:
