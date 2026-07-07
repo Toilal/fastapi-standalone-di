@@ -22,6 +22,7 @@ from fastapi_standalone_di import (
     get_app_state,
     get_container,
     patch_for_registrable_dependency_support,
+    register_bindings,
     set_app_state_value,
 )
 ```
@@ -214,6 +215,35 @@ Only needed when FastAPI itself must see the concrete implementation at
 introspection time (e.g. for OpenAPI); `FastAPIContainer` does not require it. The
 patch only affects `Depends()` objects created afterwards — apply it at import
 time. Returns `True` if applied, `False` if already patched.
+
+### register_bindings
+
+```python
+def register_bindings(
+    *packages: str | ModuleType,
+    module: str = "di",
+    attr: str = "register",
+    recursive: bool = False,
+    warn_missing: bool = True,
+) -> None
+```
+
+Discover per-feature binding modules and run them, so every
+`RegistrableDependency` is bound before the routers are mounted. For each
+subpackage of every `packages` entry, it imports `<subpackage>.<module>` and
+calls its `attr` callable.
+
+- `packages` — the packages to scan, each an imported module or a dotted name.
+- `module` — the submodule to look for under each subpackage; may be a dotted
+  path (e.g. `"api.di"`).
+- `attr` — the callable to invoke on that module.
+- `recursive` — also walk nested subpackages, not just the direct ones.
+- `warn_missing` — `logging.warning` when a matching module exposes no callable
+  `attr`, instead of failing silently at request time.
+
+Subpackages with no such module are skipped silently. An import error raised *by*
+a binding module propagates. Raises `ValueError` if a `packages` entry is not a
+package.
 
 Connection parameters
 ---------------------

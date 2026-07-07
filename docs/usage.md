@@ -271,6 +271,38 @@ raises `RuntimeError`.
     time, before the routes declaring the dependencies are defined; it only
     affects `Depends()` objects created afterwards.
 
+Discovering bindings
+--------------------
+
+In a feature-oriented codebase, each feature binds its interfaces to their
+implementations in a per-feature `di` module:
+
+```python
+# myapp/features/orders/di.py
+def register() -> None:
+    OrderService.register(DefaultOrderService)
+    OrderRepository.register(SqlOrderRepository)
+```
+
+Because FastAPI resolves a route's full `Depends(...)` tree at decoration time,
+every binding — including cross-feature ones — must be in place *before* the
+routers are mounted. [`register_bindings`](./api.md#register_bindings) walks the
+subpackages of a package, imports each one's `di` module and calls its
+`register()`, so the whole wiring happens up front in one order-independent call:
+
+```python
+from fastapi_standalone_di import register_bindings
+
+register_bindings("myapp.features")  # before include_router / router discovery
+```
+
+A subpackage with no `di` module is skipped silently (a feature may declare no
+bindings); a `di` module that exposes no callable `register` is surfaced with a
+`logging.warning` instead of failing at request time. Point it at several feature
+roots at once with `register_bindings(pkg_a, pkg_b)`, nest the binding module with
+`module="api.di"`, rename the callable with `attr=...`, or cover nested feature
+trees with `recursive=True`.
+
 Sharing application state
 -------------------------
 
