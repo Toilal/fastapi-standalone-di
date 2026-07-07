@@ -21,7 +21,6 @@ def make_package(tmp_path: Path) -> Iterator[Callable[[dict[str, str]], str]]:
     Every subpackage's ``register()`` appends its own name to ``ROOT._calls``,
     so a test can assert which modules were triggered and in what order.
     """
-    created: list[str] = []
 
     def build(tree: dict[str, str]) -> str:
         root_dir = tmp_path / _ROOT
@@ -46,7 +45,6 @@ def make_package(tmp_path: Path) -> Iterator[Callable[[dict[str, str]], str]]:
     for name in list(sys.modules):
         if name == _ROOT or name.startswith(f"{_ROOT}."):
             del sys.modules[name]
-    created.clear()
 
 
 def _di(feature: str, *, module: str = "di") -> dict[str, str]:
