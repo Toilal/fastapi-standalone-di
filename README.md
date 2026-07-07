@@ -65,7 +65,7 @@ The in-development docs (built from `develop`) are previewed at
 
 ## Requirements
 
-- Python ≥ 3.12
+- Python ≥ 3.11
 - FastAPI ≥ 0.61
 
 ## License
