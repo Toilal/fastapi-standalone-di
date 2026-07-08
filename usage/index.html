@@ -937,9 +937,10 @@ raises <code>RuntimeError</code>.</p>
 <p>The container resolves the interface indirection on its own. You only need
 <a href=".././api/#patch_for_registrable_dependency_support"><code>patch_for_registrable_dependency_support()</code></a>
 when FastAPI itself must see the concrete implementation at introspection
-time (e.g. for OpenAPI generation inside a real app). Apply it at import
-time, before the routes declaring the dependencies are defined; it only
-affects <code>Depends()</code> objects created afterwards.</p>
+time (e.g. for OpenAPI generation inside a real app). It patches the
+<code>Depends</code> class in place, so it affects every <code>Depends()</code> object regardless
+of when it was created — calling it once at import time is enough and its
+order relative to your <code>@singleton</code>/<code>Depends()</code> definitions does not matter.</p>
 </div>
 <h2 id="discovering-bindings">Discovering bindings<a class="headerlink" href="#discovering-bindings" title="Permanent link">&para;</a></h2>
 <p>In a feature-oriented codebase, each feature binds its interfaces to their
