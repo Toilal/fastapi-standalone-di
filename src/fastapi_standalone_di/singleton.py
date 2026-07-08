@@ -18,7 +18,10 @@ Two resolution modes are available:
 * **lazy** (``lazy=True``) — the wrapper delegates to ``container.get(factory)``,
   so the tree is resolved exactly once and the container owns any ``yield``
   teardown (run at ``aclose()`` == application shutdown). Requires a container
-  reachable through :func:`~fastapi_standalone_di.resolve.get_container`.
+  registered in ``app_state`` (in ASGI, install one with
+  :func:`~fastapi_standalone_di.resolve.container_lifespan`; standalone, the
+  resolving container provides itself) — unless the value is preset under
+  ``key``, which short-circuits construction before any container is needed.
 
 Usage::
 
@@ -148,22 +151,41 @@ def _build_eager(factory: Callable[..., T], key: str) -> Callable[..., T]:
 
 def _build_lazy(factory: Callable[..., T], key: str) -> Callable[..., T]:
     """Build the lazy-mode wrapper: delegate construction to the container."""
-    from fastapi_standalone_di.resolve import FastAPIContainer, get_container
+    from fastapi_standalone_di.resolve import (
+        FastAPIContainer,
+        _get_container_optional,
+    )
 
     async def wrapper(
         app_state: AppState = Depends(get_app_state),
-        container: FastAPIContainer = Depends(get_container),
+        container: FastAPIContainer | None = Depends(_get_container_optional),
     ) -> Any:
         cached = app_state.get(key, _MISSING)
         if cached is not _MISSING:
             return cached
+        if container is None:
+            target = getattr(factory, "__qualname__", repr(factory))
+            raise RuntimeError(
+                f"lazy singleton {target!r} needs a FastAPIContainer but none is "
+                "registered in app_state. In ASGI, install one at startup — e.g. "
+                "FastAPI(lifespan=container_lifespan) — or preset the value under "
+                f"key {key!r} so construction is short-circuited."
+            )
         instance = await container.get(factory)
         app_state.set(key, instance)
         return instance
 
     functools.wraps(factory)(wrapper)
-    # An explicit signature so ``functools.wraps``' copied ``__wrapped__`` /
-    # annotations never lead FastAPI to introspect the factory's signature here.
+    # Drop the ``__wrapped__`` link ``functools.wraps`` sets: FastAPI's
+    # ``Dependant`` classifies a call by unwrapping it (``inspect.unwrap``), so a
+    # link to a generator *factory* would make it treat this coroutine wrapper as
+    # an (async) generator and try to iterate it. The explicit ``__signature__``
+    # below likewise keeps FastAPI from introspecting the factory's parameters.
+    del wrapper.__wrapped__  # type: ignore[attr-defined]
+    # ``container`` depends on the non-raising ``_get_container_optional``: FastAPI
+    # resolves it unconditionally (before the body), so a preset value can still
+    # short-circuit — the wrapper raises only on a real cache miss with no
+    # container. Under ``FastAPIContainer`` it is seeded to the resolving one.
     wrapper.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
         [
             inspect.Parameter(
@@ -175,8 +197,8 @@ def _build_lazy(factory: Callable[..., T], key: str) -> Callable[..., T]:
             inspect.Parameter(
                 "container",
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=Depends(get_container),
-                annotation=FastAPIContainer,
+                default=Depends(_get_container_optional),
+                annotation=FastAPIContainer | None,
             ),
         ]
     )

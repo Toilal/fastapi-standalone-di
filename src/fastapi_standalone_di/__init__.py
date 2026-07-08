@@ -22,6 +22,7 @@ from fastapi_standalone_di.resolve import (
     ResolutionScope,
     ResolvedDependencies,
     ScopeError,
+    container_lifespan,
     get_container,
 )
 from fastapi_standalone_di.singleton import singleton
@@ -43,6 +44,7 @@ __all__ = [
     "ResolvedDependencies",
     "ScopeError",
     "__version__",
+    "container_lifespan",
     "get_app_state",
     "get_container",
     "patch_for_registrable_dependency_support",
