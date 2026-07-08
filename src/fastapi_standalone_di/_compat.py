@@ -13,6 +13,14 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
+import fastapi.params
+
+# ``scope`` was added to ``Depends.__init__`` only in recent FastAPI; detect it
+# so callers can gate ``Depends(scope=...)`` usage on older releases.
+DEPENDS_SUPPORTS_SCOPE = (
+    "scope" in inspect.signature(fastapi.params.Depends.__init__).parameters
+)
+
 
 def _unwrap(call: Callable[..., Any]) -> Callable[..., Any]:
     while isinstance(call, functools.partial):

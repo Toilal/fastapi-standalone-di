@@ -8,10 +8,9 @@ inside FastAPI routes and when resolving dependencies standalone via
 :class:`~fastapi_standalone_di.resolve.FastAPIContainer`.
 """
 
-import inspect
 from collections.abc import Callable
 from inspect import isclass
-from typing import Any, Literal
+from typing import Any
 
 import fastapi.params
 
@@ -57,60 +56,40 @@ class RegistrableDependency:
 
 FastAPIDepends = fastapi.params.Depends
 
-# ``scope`` was added to ``Depends.__init__`` only in recent FastAPI; detect it
-# so ``_Depends`` stays constructible on older releases.
-_DEPENDS_SUPPORTS_SCOPE = (
-    "scope" in inspect.signature(FastAPIDepends.__init__).parameters
-)
+# The ``dependency`` value FastAPI's ``Depends.__init__`` stores as a plain
+# instance attribute; the patch rehomes it here so its own ``dependency``
+# property can dereference it without recursing through itself.
+_RAW_DEPENDENCY = "_fsd_dependency"
+
+# Marks the class as already carrying the property, so the patch is idempotent.
+_PATCHED_FLAG = "_fsd_registrable_patched"
 
 
-class _Depends(FastAPIDepends):
-    """A ``Depends`` that dereferences a ``RegistrableDependency`` to its impl.
+def _resolve_registrable(raw: Callable[..., Any] | None) -> Callable[..., Any] | None:
+    if isclass(raw) and issubclass(raw, RegistrableDependency):
+        return raw.dependency()
+    return raw
 
-    ``scope`` (``"function"``/``"request"``) is forwarded to FastAPI for
-    introspection parity but has no intrinsic effect when resolving standalone:
-    there is no request lifecycle outside ASGI. :class:`FastAPIContainer`
-    interprets it only when its ``default_scope`` is a mapping keyed by these
-    literals; otherwise the value is inert.
-    """
 
-    # The ``scope`` branch is resolved once, at class-definition time, rather
-    # than on every instantiation.
-    if _DEPENDS_SUPPORTS_SCOPE:
-
-        def __init__(
-            self,
-            dependency: Callable[..., Any] | None = None,
-            *,
-            use_cache: bool = True,
-            scope: Literal["function", "request"] | None = None,
-        ):
-            FastAPIDepends.__init__(self, dependency, use_cache=use_cache, scope=scope)
-            self._dependency = dependency
+def _get_registrable_dependency(self: Any) -> Callable[..., Any] | None:
+    state = self.__dict__
+    if _RAW_DEPENDENCY in state:
+        raw = state[_RAW_DEPENDENCY]
     else:
+        raw = state.get("dependency")
+    return _resolve_registrable(raw)
 
-        def __init__(
-            self,
-            dependency: Callable[..., Any] | None = None,
-            *,
-            use_cache: bool = True,
-            scope: Literal["function", "request"] | None = None,
-        ):
-            FastAPIDepends.__init__(self, dependency, use_cache=use_cache)
-            self._dependency = dependency
 
-    @property
-    def dependency(self) -> Callable[..., Any] | None:
-        return (
-            self._dependency.dependency()
-            if isclass(self._dependency)
-            and issubclass(self._dependency, RegistrableDependency)
-            else self._dependency
-        )
+def _set_registrable_dependency(self: Any, value: Callable[..., Any] | None) -> None:
+    self.__dict__[_RAW_DEPENDENCY] = value
 
-    @dependency.setter
-    def dependency(self, value: Callable[..., Any] | None) -> None:
-        self._dependency = value
+
+# A data descriptor: it shadows the ``dependency`` entry that FastAPI's
+# ``__init__`` writes into every instance's ``__dict__`` — including instances
+# built *before* the patch — so the dereference applies to them too.
+_registrable_dependency = property(
+    _get_registrable_dependency, _set_registrable_dependency
+)
 
 
 def patch_for_registrable_dependency_support() -> bool:
@@ -120,13 +99,18 @@ def patch_for_registrable_dependency_support() -> bool:
     introspection time (e.g. for OpenAPI). :class:`FastAPIContainer` resolves the
     indirection on its own and does not require this patch.
 
-    The patch only affects ``Depends`` objects created **after** it runs: any
-    ``Depends()`` already instantiated keeps the original class. Apply it at
-    import time, before the routes declaring the dependencies are defined.
+    The patch installs a ``dependency`` property **on the existing class in
+    place** rather than swapping the class reference, so every ``Depends``
+    instance is affected regardless of when it was built and every one keeps
+    passing FastAPI's ``isinstance(_, fastapi.params.Depends)`` check. Order no
+    longer matters: it works whether the ``Depends`` objects (a route's own, a
+    :func:`~fastapi_standalone_di.singleton.singleton` wrapper's, the
+    container's) were created before or after this call.
 
     Returns ``True`` if the patch was applied, ``False`` if already patched.
     """
-    if FastAPIDepends is fastapi.params.Depends:
-        fastapi.params.Depends = _Depends  # type: ignore[assignment,misc]
-        return True
-    return False
+    if getattr(FastAPIDepends, _PATCHED_FLAG, False):
+        return False
+    FastAPIDepends.dependency = _registrable_dependency  # type: ignore[assignment]
+    setattr(FastAPIDepends, _PATCHED_FLAG, True)
+    return True

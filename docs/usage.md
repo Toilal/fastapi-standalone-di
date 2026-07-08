@@ -267,9 +267,10 @@ raises `RuntimeError`.
     The container resolves the interface indirection on its own. You only need
     [`patch_for_registrable_dependency_support()`](./api.md#patch_for_registrable_dependency_support)
     when FastAPI itself must see the concrete implementation at introspection
-    time (e.g. for OpenAPI generation inside a real app). Apply it at import
-    time, before the routes declaring the dependencies are defined; it only
-    affects `Depends()` objects created afterwards.
+    time (e.g. for OpenAPI generation inside a real app). It patches the
+    `Depends` class in place, so it affects every `Depends()` object regardless
+    of when it was created — calling it once at import time is enough and its
+    order relative to your `@singleton`/`Depends()` definitions does not matter.
 
 Discovering bindings
 --------------------
