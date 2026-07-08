@@ -21,10 +21,15 @@ point can wire an explicit subset of features rather than a whole subtree.
 
 import importlib
 import importlib.util
+import inspect
 import logging
 import pkgutil
 import sys
+from collections.abc import Callable, Iterator, Sequence
 from types import ModuleType
+from typing import Any, NamedTuple, cast
+
+from fastapi_standalone_di.registration import RegistrableDependency
 
 logger = logging.getLogger(__name__)
 
@@ -162,3 +167,217 @@ def _register_from(
             logger.warning("%s defines no callable %r", name, attr)
         return
     register()
+
+
+class AutoBindingError(ValueError):
+    """Raised when :func:`auto_bindings` cannot wire every discovered interface.
+
+    Aggregates all wiring gaps found in a single scan: interfaces with no
+    matching implementation, and ambiguous interfaces (several candidates that no
+    ``conflict_solver`` resolved). Nothing is registered when it is raised.
+    """
+
+
+class Binding(NamedTuple):
+    """One resolved interface→implementation link reported by :func:`auto_bindings`.
+
+    ``already_bound`` is ``True`` for an interface that carried an implementation
+    before the call (left untouched, reported for completeness) and ``False`` for
+    one bound by the call itself.
+    """
+
+    interface: type[RegistrableDependency]
+    implementation: Callable[..., Any]
+    already_bound: bool
+
+
+ConflictSolver = Callable[[type[RegistrableDependency], list[type]], type | None]
+
+
+def auto_bindings(
+    *packages: str | ModuleType,
+    interfaces: Sequence[str | ModuleType] = (),
+    implementations: Sequence[str | ModuleType] = (),
+    recursive: bool = True,
+    conflict_solver: ConflictSolver | None = None,
+) -> list[Binding]:
+    """Wire ``RegistrableDependency`` interfaces to their implementations by convention.
+
+    Scans the given packages for interface classes (those carrying
+    ``RegistrableDependency`` as a **direct** base) and implementation classes,
+    then binds each interface to the implementation that declares it as a
+    **direct** base — the class-hierarchy equivalent of the hand-written
+    ``register()`` calls that :func:`register_bindings` discovers.
+
+    :param packages: packages that may hold **both** interfaces and
+        implementations, scanned once for both roles. Each is a dotted name or an
+        imported module; a leading ``.`` is anchored to the caller's package,
+        like :func:`register_bindings`.
+    :param interfaces: extra packages scanned for interface classes only.
+    :param implementations: extra packages scanned for implementation classes only.
+    :param recursive: also descend into nested subpackages. Defaults to ``True``
+        (unlike :func:`register_bindings`): implementations are typically spread
+        across a subtree.
+    :param conflict_solver: optional tie-breaker called once per interface that
+        has two or more matching implementations, with the interface class and
+        the ordered candidate classes. It returns the chosen candidate (must be
+        one of them), or ``None`` to leave the ambiguity unresolved. Without it,
+        an ambiguity is an error.
+
+    An interface is bound to its single matching implementation. An interface
+    that already carries its own implementation is left untouched and reported
+    with ``already_bound=True``. Resolution and registration are two phases: if
+    any interface has zero matches, or an unresolved ambiguity, nothing is
+    registered and an :class:`AutoBindingError` aggregating every problem is
+    raised.
+
+    :returns: every discovered interface that ends up with an implementation —
+        both freshly bound (``already_bound=False``) and pre-existing
+        (``already_bound=True``) — ordered by the interface's module and
+        qualified name.
+    :raises AutoBindingError: if some interface cannot be wired, or the
+        ``conflict_solver`` returns a value that is not one of the candidates.
+    """
+    specs = [*packages, *interfaces, *implementations]
+    anchor = (
+        _caller_package()
+        if any(isinstance(s, str) and s.startswith(".") for s in specs)
+        else None
+    )
+    interface_roots = _resolve_roots([*packages, *interfaces], anchor)
+    implementation_roots = _resolve_roots([*packages, *implementations], anchor)
+    interface_names = {module.__name__ for module in interface_roots}
+    implementation_names = {module.__name__ for module in implementation_roots}
+
+    found: list[type] = []
+    candidates: list[type] = []
+    for cls in _scan_classes(interface_roots + implementation_roots, recursive):
+        if RegistrableDependency in cls.__bases__:
+            if _under_any(cls.__module__, interface_names):
+                found.append(cls)
+        elif not inspect.isabstract(cls) and _under_any(
+            cls.__module__, implementation_names
+        ):
+            candidates.append(cls)
+
+    by_interface: dict[type, list[type]] = {interface: [] for interface in found}
+    for impl in candidates:
+        for base in impl.__bases__:
+            if base in by_interface:
+                by_interface[base].append(impl)
+
+    planned: list[Binding] = []
+    preexisting: list[Binding] = []
+    unmatched: list[type] = []
+    ambiguous: list[tuple[type, list[type]]] = []
+    for interface in found:
+        iface = cast("type[RegistrableDependency]", interface)
+        own_impl = interface.__dict__.get("_impl")
+        if own_impl is not None:
+            preexisting.append(Binding(iface, own_impl, True))
+            continue
+        impls = sorted(by_interface[interface], key=_class_key)
+        if len(impls) == 1:
+            planned.append(Binding(iface, impls[0], False))
+        elif not impls:
+            unmatched.append(interface)
+        elif conflict_solver is None:
+            ambiguous.append((interface, impls))
+        else:
+            chosen = conflict_solver(iface, impls)
+            if chosen is None:
+                ambiguous.append((interface, impls))
+            elif chosen not in impls:
+                raise AutoBindingError(
+                    f"conflict_solver returned {_qualname(chosen)}, which is not "
+                    f"among the candidates for {_qualname(interface)}: "
+                    f"{[_qualname(i) for i in impls]}"
+                )
+            else:
+                planned.append(Binding(iface, chosen, False))
+
+    if unmatched or ambiguous:
+        raise AutoBindingError(_format_problems(unmatched, ambiguous))
+
+    for binding in planned:
+        binding.interface.register(binding.implementation)
+
+    return sorted(planned + preexisting, key=lambda b: _class_key(b.interface))
+
+
+def _resolve_roots(
+    specs: Sequence[str | ModuleType], anchor: str | None
+) -> list[ModuleType]:
+    roots: list[ModuleType] = []
+    seen: set[str] = set()
+    for spec in specs:
+        if isinstance(spec, str):
+            module = importlib.import_module(
+                spec, anchor if spec.startswith(".") else None
+            )
+        else:
+            module = spec
+        if module.__name__ not in seen:
+            seen.add(module.__name__)
+            roots.append(module)
+    return roots
+
+
+def _scan_classes(roots: list[ModuleType], recursive: bool) -> list[type]:
+    visited: set[str] = set()
+    classes: dict[str, type] = {}
+    for root in roots:
+        for module in _walk_modules(root, recursive=recursive, visited=visited):
+            for obj in vars(module).values():
+                if isinstance(obj, type) and obj.__module__ == module.__name__:
+                    classes[f"{obj.__module__}.{obj.__qualname__}"] = obj
+    return list(classes.values())
+
+
+def _walk_modules(
+    package: ModuleType, *, recursive: bool, visited: set[str]
+) -> Iterator[ModuleType]:
+    if package.__name__ in visited:
+        return
+    visited.add(package.__name__)
+    yield package
+    path = getattr(package, "__path__", None)
+    if path is None:
+        return
+    for info in pkgutil.iter_modules(path, prefix=f"{package.__name__}."):
+        if info.name in visited:
+            continue
+        submodule = importlib.import_module(info.name)
+        if info.ispkg and recursive:
+            yield from _walk_modules(submodule, recursive=recursive, visited=visited)
+        else:
+            visited.add(info.name)
+            yield submodule
+
+
+def _under_any(module_name: str, roots: set[str]) -> bool:
+    return any(
+        module_name == root or module_name.startswith(f"{root}.") for root in roots
+    )
+
+
+def _class_key(cls: type) -> tuple[str, str]:
+    return (cls.__module__, cls.__qualname__)
+
+
+def _qualname(cls: type) -> str:
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def _format_problems(
+    unmatched: list[type], ambiguous: list[tuple[type, list[type]]]
+) -> str:
+    lines = ["auto_bindings could not wire every interface:"]
+    for interface in sorted(unmatched, key=_class_key):
+        lines.append(f"  - {_qualname(interface)}: no matching implementation")
+    for interface, impls in sorted(ambiguous, key=lambda pair: _class_key(pair[0])):
+        names = ", ".join(_qualname(impl) for impl in impls)
+        lines.append(
+            f"  - {_qualname(interface)}: several matching implementations ({names})"
+        )
+    return "\n".join(lines)

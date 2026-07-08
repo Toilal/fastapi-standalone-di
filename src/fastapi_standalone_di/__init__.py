@@ -5,7 +5,13 @@ from fastapi_standalone_di.app_state import (
     get_app_state,
     set_app_state_value,
 )
-from fastapi_standalone_di.discovery import register_bindings
+from fastapi_standalone_di.discovery import (
+    AutoBindingError,
+    Binding,
+    ConflictSolver,
+    auto_bindings,
+    register_bindings,
+)
 from fastapi_standalone_di.registration import (
     RegistrableDependency,
     patch_for_registrable_dependency_support,
@@ -31,6 +37,9 @@ __version__ = "0.5.1"
 
 __all__ = [
     "AppState",
+    "AutoBindingError",
+    "Binding",
+    "ConflictSolver",
     "DependantCache",
     "DependencyOverrides",
     "DependencyScope",
@@ -44,6 +53,7 @@ __all__ = [
     "ResolvedDependencies",
     "ScopeError",
     "__version__",
+    "auto_bindings",
     "container_lifespan",
     "get_app_state",
     "get_container",
