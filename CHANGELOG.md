@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.5.0 (2026-07-08)
+
+### Features
+
+- Make lazy singletons usable as ASGI route dependencies
+  ([#42](https://github.com/Toilal/fastapi-standalone-di/pull/42),
+  [`bebe3e8`](https://github.com/Toilal/fastapi-standalone-di/commit/bebe3e8fdc94e1fde75fe073dcfc9179cee95566))
+
+
 ## v0.4.1 (2026-07-08)
 
 ### Bug Fixes
