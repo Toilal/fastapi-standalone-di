@@ -310,6 +310,8 @@ subpackages — so an entry point that needs only a couple of features can wire
 exactly those instead of a whole subtree:
 
 ```python
+from fastapi_standalone_di import register_bindings
+
 # web entry point: every feature under the root
 register_bindings("myapp.features")
 
