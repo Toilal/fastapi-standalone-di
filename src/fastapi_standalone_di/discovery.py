@@ -14,7 +14,9 @@ Because FastAPI resolves a route's full ``Depends(...)`` tree at decoration
 time, every binding must be in place *before* the routers are mounted.
 :func:`register_bindings` walks the subpackages of a package, imports each one's
 binding module and calls its ``register()`` — the "wire everything up front"
-step, so every ``Depends(Interface)`` resolves at route-decoration time.
+step, so every ``Depends(Interface)`` resolves at route-decoration time. Passing
+a feature package directly also imports its *own* binding module, so an entry
+point can wire an explicit subset of features rather than a whole subtree.
 """
 
 import importlib
@@ -34,11 +36,15 @@ def register_bindings(
     recursive: bool = False,
     warn_missing: bool = True,
 ) -> None:
-    """Import each subpackage's binding module and call its registration callable.
+    """Import each package's own and subpackages' binding modules and call their
+    registration callable.
 
-    :param packages: the packages whose subpackages are scanned, each an
-        imported module or a dotted name. Pass several to wire up more than one
-        feature root in a single call. A name starting with ``.`` is relative to
+    :param packages: the packages whose own binding module and subpackages are
+        wired, each an imported module or a dotted name. Each package's own
+        ``<module>`` is imported (if any) *and* its subpackages are scanned, so
+        passing feature roots wires whole subtrees while passing concrete
+        feature packages wires exactly those. Pass several to wire up more than
+        one target in a single call. A name starting with ``.`` is relative to
         the calling module's package (``"."`` is that package itself,
         ``".features"`` a subpackage of it), like a ``from . import`` statement.
     :param module: the submodule to look for under each subpackage. May be a
@@ -62,6 +68,7 @@ def register_bindings(
         if any(isinstance(p, str) and p.startswith(".") for p in packages)
         else None
     )
+    seen: set[str] = set()
     for package in packages:
         if isinstance(package, str):
             resolved = importlib.import_module(
@@ -75,6 +82,7 @@ def register_bindings(
             attr=attr,
             recursive=recursive,
             warn_missing=warn_missing,
+            seen=seen,
         )
 
 
@@ -96,16 +104,28 @@ def _walk(
     attr: str,
     recursive: bool,
     warn_missing: bool,
+    seen: set[str],
+    include_self: bool = True,
 ) -> None:
     path = getattr(package, "__path__", None)
     if path is None:
         raise ValueError(
             f"{package.__name__!r} is not a package (no __path__ to iterate)"
         )
+    if include_self:
+        _register_from(
+            package.__name__,
+            module=module,
+            attr=attr,
+            warn_missing=warn_missing,
+            seen=seen,
+        )
     for info in pkgutil.iter_modules(path, prefix=f"{package.__name__}."):
         if not info.ispkg:
             continue
-        _register_from(info.name, module=module, attr=attr, warn_missing=warn_missing)
+        _register_from(
+            info.name, module=module, attr=attr, warn_missing=warn_missing, seen=seen
+        )
         if recursive:
             _walk(
                 importlib.import_module(info.name),
@@ -113,6 +133,8 @@ def _walk(
                 attr=attr,
                 recursive=True,
                 warn_missing=warn_missing,
+                seen=seen,
+                include_self=False,
             )
 
 
@@ -122,13 +144,17 @@ def _register_from(
     module: str,
     attr: str,
     warn_missing: bool,
+    seen: set[str],
 ) -> None:
     name = f"{subpackage}.{module}"
+    if name in seen:
+        return
     try:
         if importlib.util.find_spec(name) is None:
             return
     except ModuleNotFoundError:
         return
+    seen.add(name)
     imported = importlib.import_module(name)
     register = getattr(imported, attr, None)
     if not callable(register):

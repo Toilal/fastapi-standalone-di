@@ -84,6 +84,43 @@ class TestRegisterBindings:
         register_bindings(f"{root}.group_a", f"{root}.group_b")
         assert sorted(_calls(root)) == ["orders", "users"]
 
+    def test_binds_own_module_of_passed_package(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(_di("orders"))
+        register_bindings(f"{root}.orders")
+        assert _calls(root) == ["orders"]
+
+    def test_binds_own_module_and_scans_children(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(
+            {f"orders/{k}": v for k, v in _di("child").items()}
+            | {
+                "orders/__init__.py": "",
+                "orders/di.py": (
+                    f"from {_ROOT} import _calls\n\n\ndef register() -> None:\n"
+                    "    _calls.append('orders')\n"
+                ),
+            }
+        )
+        register_bindings(f"{root}.orders")
+        assert sorted(_calls(root)) == ["child", "orders"]
+
+    def test_wires_explicit_subset_of_features(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package({**_di("feature_a"), **_di("feature_b"), **_di("other")})
+        register_bindings(f"{root}.feature_a", f"{root}.feature_b")
+        assert sorted(_calls(root)) == ["feature_a", "feature_b"]
+
+    def test_overlapping_packages_register_once(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(_di("orders"))
+        register_bindings(root, f"{root}.orders")
+        assert _calls(root) == ["orders"]
+
     def test_relative_package_is_anchored_to_caller(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:

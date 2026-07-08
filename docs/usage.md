@@ -305,6 +305,23 @@ roots at once with `register_bindings(pkg_a, pkg_b)`, nest the binding module wi
 `module="api.di"`, rename the callable with `attr=...`, or cover nested feature
 trees with `recursive=True`.
 
+Each package you pass wires its **own** `di` module too, not just its
+subpackages — so an entry point that needs only a couple of features can wire
+exactly those instead of a whole subtree:
+
+```python
+from fastapi_standalone_di import register_bindings
+
+# web entry point: every feature under the root
+register_bindings("myapp.features")
+
+# daemon entry point: only these two features
+register_bindings("myapp.features.config", "myapp.features.source")
+```
+
+Overlapping targets (e.g. a root and one of its children) each bind at most
+once.
+
 Sharing application state
 -------------------------
 
