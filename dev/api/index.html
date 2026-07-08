@@ -519,6 +519,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#singleton" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        singleton
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -845,6 +856,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#singleton" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        singleton
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1041,7 +1063,8 @@ package:</p>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">patch_for_registrable_dependency_support</span><span class="p">,</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">register_bindings</span><span class="p">,</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">set_app_state_value</span><span class="p">,</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="p">)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">singleton</span><span class="p">,</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="container">Container<a class="headerlink" href="#container" title="Permanent link">&para;</a></h2>
 <h3 id="fastapicontainer">FastAPIContainer<a class="headerlink" href="#fastapicontainer" title="Permanent link">&para;</a></h3>
@@ -1172,7 +1195,40 @@ available to both FastAPI and standalone contexts.</p>
 <p>FastAPI dependency returning the active <code>FastAPIContainer</code>. Register the container
 in <code>app_state</code> at startup, e.g. via
 <code>set_app_state_value("container", FastAPIContainer(...))</code>. Raises <code>RuntimeError</code>
-if no container is registered.</p>
+if no container is registered. When resolved <em>through</em> a container, it yields that
+container itself, so <code>Depends(get_container)</code> works standalone without registering
+anything.</p>
+<h3 id="singleton">singleton<a class="headerlink" href="#singleton" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">singleton</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="n">factory</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">lazy</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]</span> <span class="o">|</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]],</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]]</span>
+</span></code></pre></div>
+<p>Turn a dependency factory into an application-lifetime singleton: its instance is
+built lazily on first access, cached in <a href="#appstate"><code>AppState</code></a>, and reused
+thereafter — identically under FastAPI (shared across requests via
+<code>request.app.state</code>) and standalone (shared across containers sharing the same
+<code>AppState</code>). Usable functionally (<code>get_db = singleton(build_db, key="db")</code>), as a
+bare decorator (<code>@singleton</code>), or a parametrised one (<code>@singleton(key="db")</code>). The
+result is a drop-in dependency for <code>Depends(...)</code> or <code>container.get(...)</code>.</p>
+<ul>
+<li><code>key</code> — the <code>AppState</code> key under which the instance is cached. Defaults to a
+  namespaced id derived from the factory. Sharing a key with
+  <a href="#set_app_state_value"><code>set_app_state_value</code></a> presets/overrides the instance (a
+  preset short-circuits construction).</li>
+<li><code>lazy</code> — resolution semantics:<ul>
+<li><code>False</code> (default, <em>eager</em>) — the factory body runs at most once, but its
+  <code>Depends(...)</code> sub-tree is re-resolved on each access; no container is
+  required. Generator (<code>yield</code>) factories are rejected (<code>TypeError</code>).</li>
+<li><code>True</code> (<em>lazy</em>) — construction is delegated to the container reachable via
+  <a href="#get_container"><code>get_container</code></a>; the sub-tree is resolved exactly once and
+  the container owns any <code>yield</code> teardown (run at <code>aclose()</code> == application
+  shutdown).</li>
+</ul>
+</li>
+</ul>
 <h2 id="registrable-dependencies">Registrable dependencies<a class="headerlink" href="#registrable-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="registrabledependency">RegistrableDependency<a class="headerlink" href="#registrabledependency" title="Permanent link">&para;</a></h3>
 <p>Base class for a dependency interface with a swappable implementation. Declare an
@@ -1187,7 +1243,7 @@ abstract interface inheriting <code>RegistrableDependency</code>, bind a concret
 <li><code>Interface.impl</code> — class property returning the registered implementation.</li>
 </ul>
 <h3 id="patch_for_registrable_dependency_support">patch_for_registrable_dependency_support<a class="headerlink" href="#patch_for_registrable_dependency_support" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">patch_for_registrable_dependency_support</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">patch_for_registrable_dependency_support</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </span></code></pre></div>
 <p>Patch <code>fastapi.params.Depends</code> so it resolves a <code>RegistrableDependency</code> eagerly.
 Only needed when FastAPI itself must see the concrete implementation at
@@ -1195,13 +1251,13 @@ introspection time (e.g. for OpenAPI); <code>FastAPIContainer</code> does not re
 patch only affects <code>Depends()</code> objects created afterwards — apply it at import
 time. Returns <code>True</code> if applied, <code>False</code> if already patched.</p>
 <h3 id="register_bindings">register_bindings<a class="headerlink" href="#register_bindings" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_bindings</span><span class="p">(</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="n">module</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;di&quot;</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">attr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;register&quot;</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">warn_missing</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_bindings</span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">module</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;di&quot;</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">attr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;register&quot;</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="n">warn_missing</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 <p>Discover per-feature binding modules and run them, so every
 <code>RegistrableDependency</code> is bound before the routers are mounted. For each
@@ -1221,10 +1277,10 @@ a binding module propagates. Raises <code>ValueError</code> if a <code>packages<
 package.</p>
 <h2 id="connection-parameters">Connection parameters<a class="headerlink" href="#connection-parameters" title="Permanent link">&para;</a></h2>
 <h3 id="paramsource">ParamSource<a class="headerlink" href="#paramsource" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">ParamSource</span><span class="p">:</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="n">values</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="n">default</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">ParamSource</span><span class="p">:</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">values</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">default</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div>
 <p>How to supply one class of connection parameters (query / path / header /
 cookie). <code>values</code> are explicit values keyed by parameter name (falling back to
