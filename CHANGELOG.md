@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.1 (2026-07-08)
+
+### Bug Fixes
+
+- Patch fastapi.params.Depends in place for registrable support (#40)
+  ([#41](https://github.com/Toilal/fastapi-standalone-di/pull/41),
+  [`08927a5`](https://github.com/Toilal/fastapi-standalone-di/commit/08927a574f58a6b2cee778abfc62f7e90011cb6f))
+
+
 ## v0.4.0 (2026-07-08)
 
 ### Features
