@@ -39,7 +39,7 @@ fresh at each injection point (``False``).
 
 import asyncio
 import inspect
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -48,7 +48,7 @@ from types import MappingProxyType
 from typing import Any, TypeVar, cast, overload
 from urllib.parse import urlencode
 
-from fastapi import BackgroundTasks, Depends, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Response
 from fastapi.concurrency import contextmanager_in_threadpool, run_in_threadpool
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
@@ -478,6 +478,8 @@ class FastAPIContainer:
             self._container_instances[get_app_state] = self._app_state
         if get_container not in self._dependency_overrides:
             self._container_instances[get_container] = self
+        if _get_container_optional not in self._dependency_overrides:
+            self._container_instances[_get_container_optional] = self
 
     def clear_cache(self) -> None:
         """Drop all cached container-scoped instances.
@@ -1073,6 +1075,59 @@ def get_container(
             'register one via set_app_state_value("container", FastAPIContainer(...)).'
         )
     return container
+
+
+def _get_container_optional(
+    app_state: AppState = Depends(get_app_state),
+) -> "FastAPIContainer | None":
+    """Like :func:`get_container` but returns ``None`` instead of raising.
+
+    Lazy ``singleton`` wrappers depend on this rather than on :func:`get_container`:
+    FastAPI resolves a dependency's whole ``Depends(...)`` tree before the wrapper
+    body runs, so depending on the raising :func:`get_container` would fail even
+    when a preset value makes the container unnecessary. Resolving *this* never
+    fails; the wrapper itself raises only on a genuine cache miss with no
+    container available. Under :class:`FastAPIContainer` it is seeded to the
+    resolving container, exactly like :func:`get_container`.
+    """
+    container: FastAPIContainer | None = app_state.get("container")
+    return container
+
+
+@asynccontextmanager
+async def container_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """ASGI lifespan that installs a :class:`FastAPIContainer` and closes it.
+
+    Wires a container backed by the application state into ``app.state.container``
+    so ``get_container`` and lazy :func:`~fastapi_standalone_di.singleton.singleton`
+    dependencies resolve during requests, and — crucially — owns its teardown:
+    the container's ``CONTAINER``-scoped ``yield`` dependencies are closed at
+    application shutdown via :meth:`FastAPIContainer.aclose`.
+
+    Usage::
+
+        app = FastAPI(lifespan=container_lifespan)
+
+    Compose it with your own startup/shutdown from a wrapping lifespan::
+
+        @asynccontextmanager
+        async def lifespan(app):
+            async with container_lifespan(app):
+                ...  # your own startup
+                yield
+
+    The container is reachable via ``app.state.container`` throughout; nothing is
+    yielded into the lifespan state, so it stays compatible across the whole
+    supported Starlette range. Requires a FastAPI version that honours the
+    ``lifespan`` argument (FastAPI >= 0.93); on older releases register the
+    container manually at startup instead.
+    """
+    container = FastAPIContainer(app_state=AppState.from_app(app))
+    app.state.container = container
+    try:
+        yield
+    finally:
+        await container.aclose()
 
 
 def _get_dependant(

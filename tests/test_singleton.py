@@ -1,8 +1,10 @@
 """Tests for fastapi_standalone_di.singleton."""
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -12,9 +14,14 @@ from fastapi import Depends, FastAPI
 from fastapi_standalone_di import (
     AppState,
     FastAPIContainer,
+    container_lifespan,
     set_app_state_value,
     singleton,
 )
+
+# ``FastAPI(lifespan=...)`` was added in FastAPI 0.93; older floor versions
+# silently ignore the argument, so ``container_lifespan`` cannot take effect.
+_LIFESPAN_SUPPORTED = "lifespan" in inspect.signature(FastAPI.__init__).parameters
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +63,31 @@ async def _asgi_get(app: FastAPI, path: str) -> Any:
 
     await app(scope, receive, send)
     return json.loads(bytes(body))
+
+
+@asynccontextmanager
+async def _asgi_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run the app's ASGI lifespan: startup on enter, shutdown on exit."""
+    to_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    from_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    await to_app.put({"type": "lifespan.startup"})
+
+    async def receive() -> dict[str, Any]:
+        return await to_app.get()
+
+    async def send(message: dict[str, Any]) -> None:
+        await from_app.put(message)
+
+    task = asyncio.ensure_future(app({"type": "lifespan", "state": {}}, receive, send))
+    started = await from_app.get()
+    assert started["type"] == "lifespan.startup.complete", started
+    try:
+        yield
+    finally:
+        await to_app.put({"type": "lifespan.shutdown"})
+        stopped = await from_app.get()
+        assert stopped["type"] == "lifespan.shutdown.complete", stopped
+        await task
 
 
 class Settings:
@@ -406,6 +438,80 @@ class TestLazy:
         assert first == second
         assert builds == 1
         await container.aclose()
+
+    async def test_asgi_preset_short_circuits_without_container(self) -> None:
+        """A preset value lets a lazy route dependency resolve with no container.
+
+        The wrapper depends on the non-raising container getter, so the preset
+        short-circuit is reached even though the ASGI app has no container.
+        """
+
+        async def build_conn() -> AsyncIterator[Database]:
+            raise AssertionError("factory must not run when a value is preset")
+            yield  # pragma: no cover - marks build_conn as a generator factory
+
+        get_db = singleton(build_conn, key="db", lazy=True)
+
+        app = FastAPI()
+
+        @app.get("/url")
+        def route(db: Database = Depends(get_db)) -> dict[str, str]:
+            return {"url": db.url}
+
+        app.state.db = Database("preset://")
+
+        assert (await _asgi_get(app, "/url"))["url"] == "preset://"
+
+    @pytest.mark.skipif(
+        not _LIFESPAN_SUPPORTED, reason="FastAPI(lifespan=...) unsupported < 0.93"
+    )
+    async def test_asgi_lazy_generator_via_container_lifespan(self) -> None:
+        """``container_lifespan`` wires a container so a lazy generator factory
+        works as a route dependency, and owns its teardown at app shutdown."""
+        events: list[str] = []
+
+        class Conn:
+            async def close(self) -> None:
+                events.append("close")
+
+        async def get_conn() -> AsyncIterator[Conn]:
+            events.append("open")
+            conn = Conn()
+            try:
+                yield conn
+            finally:
+                await conn.close()
+
+        get_conn_singleton = singleton(get_conn, key="conn", lazy=True)
+
+        app = FastAPI(lifespan=container_lifespan)
+
+        @app.get("/id")
+        def route(conn: Conn = Depends(get_conn_singleton)) -> dict[str, int]:
+            return {"id": id(conn)}
+
+        async with _asgi_lifespan(app):
+            first = (await _asgi_get(app, "/id"))["id"]
+            second = (await _asgi_get(app, "/id"))["id"]
+            assert first == second
+            assert events == ["open"]
+
+        assert events == ["open", "close"]
+
+    async def test_asgi_lazy_without_container_or_preset_raises(self) -> None:
+        async def build() -> AsyncIterator[Database]:
+            yield Database("x")
+
+        get_db = singleton(build, key="db", lazy=True)
+
+        app = FastAPI()
+
+        @app.get("/url")
+        def route(db: Database = Depends(get_db)) -> dict[str, str]:
+            return {"url": db.url}
+
+        with pytest.raises(RuntimeError, match="needs a FastAPIContainer"):
+            await _asgi_get(app, "/url")
 
 
 class TestCrossMode:

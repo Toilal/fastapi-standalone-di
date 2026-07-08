@@ -443,10 +443,41 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-In ASGI, `lazy=True` requires a container registered in `app_state` (e.g.
-`app.state.container = FastAPIContainer(app_state=AppState.from_app(app))` at
-startup) so `get_container` can reach it; standalone, the resolving container
-provides itself.
+In ASGI, a `lazy=True` singleton needs a container registered in `app_state` to
+build its value. The easiest way is the
+[`container_lifespan`](./api.md#container_lifespan) helper, which installs one at
+startup and closes it (running the singletons' `yield` teardown) at shutdown:
+
+<!-- docs-test: skip -->
+```python
+from fastapi import FastAPI
+from fastapi_standalone_di import container_lifespan
+
+app = FastAPI(lifespan=container_lifespan)
+```
+
+To compose it with your own startup/shutdown, wrap it:
+
+<!-- docs-test: skip -->
+```python
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app):
+    async with container_lifespan(app):
+        ...  # your own startup
+        yield
+```
+
+If you register the container yourself instead
+(`app.state.container = FastAPIContainer(app_state=AppState.from_app(app))`),
+remember to call `await container.aclose()` at shutdown so `yield` teardown runs.
+
+A container is *not* required when the value is **preset** under the singleton's
+key (`app.state.<key> = value`, or `set_app_state_value(key, value)`): the preset
+short-circuits construction before any container is needed. Standalone, the
+resolving container always provides itself.
 
 Dependency scopes
 -----------------

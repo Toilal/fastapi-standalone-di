@@ -193,6 +193,23 @@ if no container is registered. When resolved *through* a container, it yields th
 container itself, so `Depends(get_container)` works standalone without registering
 anything.
 
+### container_lifespan
+
+```python
+@asynccontextmanager
+async def container_lifespan(app: FastAPI) -> AsyncIterator[None]
+```
+
+ASGI lifespan that installs a `FastAPIContainer` backed by the application state
+into `app.state.container` and closes it at shutdown (running the
+`CONTAINER`-scoped `yield` teardown of any lazy [`singleton`](#singleton)). Pass it
+directly as `FastAPI(lifespan=container_lifespan)`, or call it from a wrapping
+lifespan (`async with container_lifespan(app): ...`) to compose with your own
+startup/shutdown. It yields nothing into the lifespan state, so it is compatible
+across the whole supported Starlette range. Requires a FastAPI version that
+honours the `lifespan` argument (FastAPI ≥ 0.93); on older releases register the
+container manually at startup instead.
+
 ### singleton
 
 ```python
@@ -220,10 +237,13 @@ result is a drop-in dependency for `Depends(...)` or `container.get(...)`.
     - `False` (default, *eager*) — the factory body runs at most once, but its
       `Depends(...)` sub-tree is re-resolved on each access; no container is
       required. Generator (`yield`) factories are rejected (`TypeError`).
-    - `True` (*lazy*) — construction is delegated to the container reachable via
-      [`get_container`](#get_container); the sub-tree is resolved exactly once and
-      the container owns any `yield` teardown (run at `aclose()` == application
-      shutdown).
+    - `True` (*lazy*) — construction is delegated to a container reachable
+      through `app_state` (`app.state.container`); the sub-tree is resolved
+      exactly once and the container owns any `yield` teardown (run at `aclose()`
+      == application shutdown). In ASGI, install one with
+      [`container_lifespan`](#container_lifespan); standalone, the resolving
+      container provides itself. No container is needed when the value is preset
+      under `key` — the preset short-circuits construction.
 
 Registrable dependencies
 ------------------------
