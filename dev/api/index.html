@@ -1248,8 +1248,9 @@ abstract interface inheriting <code>RegistrableDependency</code>, bind a concret
 <p>Patch <code>fastapi.params.Depends</code> so it resolves a <code>RegistrableDependency</code> eagerly.
 Only needed when FastAPI itself must see the concrete implementation at
 introspection time (e.g. for OpenAPI); <code>FastAPIContainer</code> does not require it. The
-patch only affects <code>Depends()</code> objects created afterwards — apply it at import
-time. Returns <code>True</code> if applied, <code>False</code> if already patched.</p>
+patch mutates the class in place, so it affects every <code>Depends()</code> object
+regardless of when it was created — order relative to this call no longer
+matters. Returns <code>True</code> if applied, <code>False</code> if already patched.</p>
 <h3 id="register_bindings">register_bindings<a class="headerlink" href="#register_bindings" title="Permanent link">&para;</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_bindings</span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
