@@ -322,6 +322,60 @@ register_bindings("myapp.features.config", "myapp.features.source")
 Overlapping targets (e.g. a root and one of its children) each bind at most
 once.
 
+Auto-wiring bindings by convention
+----------------------------------
+
+When each interface has exactly one implementation that already subclasses it,
+even the per-feature `di` module is boilerplate. [`auto_bindings`](./api.md#auto_bindings)
+derives the wiring from the class hierarchy: it scans packages for interface
+classes (those carrying `RegistrableDependency` as a **direct** base) and for
+implementation classes, then binds each interface to the implementation that
+declares it as a direct base.
+
+```python
+from fastapi_standalone_di import Binding, RegistrableDependency, auto_bindings
+
+
+class ICache(RegistrableDependency): ...
+
+
+class RedisCache(ICache):  # discovered as the implementation of ICache
+    ...
+
+
+bindings: list[Binding] = auto_bindings("myapp")
+for binding in bindings:
+    verb = "kept" if binding.already_bound else "bound"
+    print(verb, binding.interface.__qualname__)
+```
+
+Pass one set of packages positionally (they may hold both interfaces and
+implementations), or split the roles with `interfaces=[...]` and
+`implementations=[...]`. An interface that already carries an implementation is
+left untouched and reported with `already_bound=True`; one with no match, or an
+unresolved ambiguity, raises `AutoBindingError` **without registering anything**
+(resolution and registration are separate phases). Scanning is recursive by
+default, and — unlike `register_bindings` — imports every module in the scanned
+packages to inspect their classes, so call it once at bootstrap.
+
+When several implementations match one interface, pass a `conflict_solver` to
+break the tie; it is called once per conflicting interface and returns the chosen
+candidate (or `None` to leave the ambiguity as an error):
+
+```python
+from fastapi_standalone_di import RegistrableDependency, auto_bindings
+
+
+def prefer_primary(
+    interface: type[RegistrableDependency], impls: list[type]
+) -> type | None:
+    primary = [impl for impl in impls if impl.__module__.startswith("myapp.primary")]
+    return primary[0] if len(primary) == 1 else None
+
+
+auto_bindings("myapp", conflict_solver=prefer_primary)
+```
+
 Sharing application state
 -------------------------
 
