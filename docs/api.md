@@ -9,6 +9,9 @@ package:
 ```python
 from fastapi_standalone_di import (
     AppState,
+    AutoBindingError,
+    Binding,
+    ConflictSolver,
     DependantCache,
     DependencyOverrides,
     DependencyScope,
@@ -21,6 +24,7 @@ from fastapi_standalone_di import (
     ResolutionScope,
     ResolvedDependencies,
     ScopeError,
+    auto_bindings,
     get_app_state,
     get_container,
     patch_for_registrable_dependency_support,
@@ -302,6 +306,76 @@ calls its `attr` callable.
 Subpackages with no such module are skipped silently. An import error raised *by*
 a binding module propagates. Raises `ValueError` if a `packages` entry is not a
 package.
+
+### auto_bindings
+
+```python
+def auto_bindings(
+    *packages: str | ModuleType,
+    interfaces: Sequence[str | ModuleType] = (),
+    implementations: Sequence[str | ModuleType] = (),
+    recursive: bool = True,
+    conflict_solver: ConflictSolver | None = None,
+) -> list[Binding]
+```
+
+Wire `RegistrableDependency` interfaces to their implementations by convention,
+deriving the bindings from the class hierarchy instead of hand-written
+`register()` calls. Scans the packages for interface classes (those carrying
+`RegistrableDependency` as a **direct** base) and implementation classes, then
+binds each interface to the implementation that declares it as a **direct** base.
+
+- `packages` — packages holding **both** interfaces and implementations, scanned
+  once for both roles. Each is a dotted name or an imported module; a leading `.`
+  is anchored to the caller's package.
+- `interfaces` — extra packages scanned for interface classes only.
+- `implementations` — extra packages scanned for implementation classes only.
+- `recursive` — also descend into nested subpackages. Defaults to `True` (unlike
+  [`register_bindings`](#register_bindings)); implementations are typically spread
+  across a subtree. Scanning imports every module in the scanned packages, so call
+  it once at bootstrap.
+- `conflict_solver` — optional tie-breaker called once per interface with two or
+  more matching implementations, with `(interface, impls)`; returns the chosen
+  candidate (one of `impls`) or `None` to leave the ambiguity unresolved.
+
+An interface that already carries its own implementation is left untouched and
+reported with `already_bound=True`. Resolution and registration are two phases:
+if any interface has zero matches or an unresolved ambiguity, nothing is
+registered and an [`AutoBindingError`](#autobindingerror) aggregating every
+problem is raised. Returns every resolved interface as a [`Binding`](#binding),
+freshly bound and pre-existing alike, ordered by the interface's module and
+qualified name.
+
+### Binding
+
+```python
+class Binding(NamedTuple):
+    interface: type[RegistrableDependency]
+    implementation: Callable[..., Any]
+    already_bound: bool
+```
+
+One resolved interface→implementation link returned by
+[`auto_bindings`](#auto_bindings). `already_bound` is `True` for an interface that
+carried an implementation before the call (left untouched, reported for
+completeness) and `False` for one bound by the call itself.
+
+### ConflictSolver
+
+```python
+ConflictSolver = Callable[[type[RegistrableDependency], list[type]], type | None]
+```
+
+Type alias for the [`auto_bindings`](#auto_bindings) `conflict_solver` callback:
+given an interface and its candidate implementations, return the chosen candidate
+or `None` to leave the ambiguity unresolved.
+
+### AutoBindingError
+
+`ValueError` subclass raised by [`auto_bindings`](#auto_bindings) when it cannot
+wire every discovered interface, aggregating all wiring gaps found in one scan:
+interfaces with no matching implementation, and ambiguous interfaces that no
+`conflict_solver` resolved. Nothing is registered when it is raised.
 
 Connection parameters
 ---------------------

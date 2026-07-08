@@ -201,6 +201,25 @@ class TestAutoBindings:
         with pytest.raises(AutoBindingError, match="not among the candidates"):
             auto_bindings(root, conflict_solver=solver)
 
+    def test_conflict_solver_exception_propagates(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/a.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "infra/b.py": _impl("MemCache", "ICache", "contracts.cache"),
+            }
+        )
+
+        def solver(
+            interface: type[RegistrableDependency], impls: list[type]
+        ) -> type | None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            auto_bindings(root, conflict_solver=solver)
+
     def test_already_bound_reported_not_rebound(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
