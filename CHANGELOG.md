@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.6.0 (2026-07-08)
+
+### Features
+
+- Auto_bindings() to wire interfaces to implementations by convention
+  ([#46](https://github.com/Toilal/fastapi-standalone-di/pull/46),
+  [`c7705de`](https://github.com/Toilal/fastapi-standalone-di/commit/c7705dead94c584cda71dc23b0a52146f3a2da47))
+
+- Auto_bindings() — wire interfaces to implementations by convention
+  ([#46](https://github.com/Toilal/fastapi-standalone-di/pull/46),
+  [`c7705de`](https://github.com/Toilal/fastapi-standalone-di/commit/c7705dead94c584cda71dc23b0a52146f3a2da47))
+
+
 ## v0.5.1 (2026-07-08)
 
 ### Bug Fixes
