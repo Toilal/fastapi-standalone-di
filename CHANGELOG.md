@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-07-08)
+
+### Features
+
+- AppState-backed application singletons (ASGI + standalone)
+  ([#39](https://github.com/Toilal/fastapi-standalone-di/pull/39),
+  [`a87d11f`](https://github.com/Toilal/fastapi-standalone-di/commit/a87d11fbf51d2e2555173203a6a11f5dba209840))
+
+
 ## v0.3.0 (2026-07-07)
 
 ### Features
