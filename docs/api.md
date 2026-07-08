@@ -346,6 +346,12 @@ problem is raised. Returns every resolved interface as a [`Binding`](#binding),
 freshly bound and pre-existing alike, ordered by the interface's module and
 qualified name.
 
+An implementation decorated with [`singleton`](#singleton) is discovered through
+the class it wraps and registered as the wrapper, so its application-lifetime
+cache is preserved. Only the default (eager) mode is supported: a lazy singleton
+implementation is rejected with an `AutoBindingError`, because resolving it
+re-enters the interface it subclasses and would deadlock the container.
+
 ### Binding
 
 ```python

@@ -30,6 +30,10 @@ from types import ModuleType
 from typing import Any, NamedTuple, cast
 
 from fastapi_standalone_di.registration import RegistrableDependency
+from fastapi_standalone_di.singleton import (
+    _SINGLETON_IMPL_ATTR,
+    _SINGLETON_LAZY_ATTR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -251,14 +255,26 @@ def auto_bindings(
 
     found: list[type] = []
     candidates: list[type] = []
-    for cls in _scan_classes(interface_roots + implementation_roots, recursive):
-        if RegistrableDependency in cls.__bases__:
-            if _under_any(cls.__module__, interface_names):
-                found.append(cls)
-        elif not inspect.isabstract(cls) and _under_any(
-            cls.__module__, implementation_names
-        ):
-            candidates.append(cls)
+    targets: dict[type, Callable[..., Any]] = {}
+    for member in _scan_members(interface_roots + implementation_roots, recursive):
+        if isinstance(member, type) and RegistrableDependency in member.__bases__:
+            if _under_any(member.__module__, interface_names):
+                found.append(member)
+            continue
+        impl = _impl_class(member)
+        if impl is None or inspect.isabstract(impl):
+            continue
+        if _under_any(impl.__module__, implementation_names):
+            if getattr(member, _SINGLETON_LAZY_ATTR, False):
+                raise AutoBindingError(
+                    f"{_qualname(impl)} is a lazy @singleton, which auto_bindings "
+                    "cannot wire to the interface it subclasses: resolving it would "
+                    "re-enter that interface and deadlock the container. Use the "
+                    "default (eager) @singleton on the implementation class, or "
+                    "register a lazy singleton factory function by hand."
+                )
+            candidates.append(impl)
+            targets[impl] = member
 
     by_interface: dict[type, list[type]] = {interface: [] for interface in found}
     for impl in candidates:
@@ -278,7 +294,7 @@ def auto_bindings(
             continue
         impls = sorted(by_interface[interface], key=_class_key)
         if len(impls) == 1:
-            planned.append(Binding(iface, impls[0], False))
+            planned.append(Binding(iface, targets[impls[0]], False))
         elif not impls:
             unmatched.append(interface)
         elif conflict_solver is None:
@@ -294,7 +310,7 @@ def auto_bindings(
                     f"{[_qualname(i) for i in impls]}"
                 )
             else:
-                planned.append(Binding(iface, chosen, False))
+                planned.append(Binding(iface, targets[chosen], False))
 
     if unmatched or ambiguous:
         raise AutoBindingError(_format_problems(unmatched, ambiguous))
@@ -323,15 +339,29 @@ def _resolve_roots(
     return roots
 
 
-def _scan_classes(roots: list[ModuleType], recursive: bool) -> list[type]:
+def _impl_class(member: object) -> type | None:
+    """The implementation class *member* stands for, or ``None`` if it is neither.
+
+    A plain class stands for itself. A ``@singleton``-decorated class is a callable
+    that carries the wrapped class under ``_SINGLETON_IMPL_ATTR``; it stands for
+    that class, so the interface is matched by the class's own bases while the
+    wrapper is what gets registered.
+    """
+    if isinstance(member, type):
+        return member
+    wrapped = getattr(member, _SINGLETON_IMPL_ATTR, None)
+    return wrapped if isinstance(wrapped, type) else None
+
+
+def _scan_members(roots: list[ModuleType], recursive: bool) -> list[Any]:
     visited: set[str] = set()
-    classes: dict[str, type] = {}
+    members: dict[str, Any] = {}
     for root in roots:
         for module in _walk_modules(root, recursive=recursive, visited=visited):
             for obj in vars(module).values():
-                if isinstance(obj, type) and obj.__module__ == module.__name__:
-                    classes[f"{obj.__module__}.{obj.__qualname__}"] = obj
-    return list(classes.values())
+                if _impl_class(obj) is not None and obj.__module__ == module.__name__:
+                    members[f"{obj.__module__}.{obj.__qualname__}"] = obj
+    return list(members.values())
 
 
 def _walk_modules(

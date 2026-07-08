@@ -55,6 +55,18 @@ T = TypeVar("T")
 # ``None`` — the latter must be cached and reused, not rebuilt on every access.
 _MISSING: Any = object()
 
+# Set on the callable ``singleton`` returns, pointing back to the wrapped factory.
+# ``auto_bindings`` reads it to discover a ``@singleton``-decorated implementation
+# (a callable, no longer a class) and register the wrapper — so the singleton gate
+# survives — while still matching the interface by the wrapped class's own bases.
+_SINGLETON_IMPL_ATTR = "__fsd_singleton_impl__"
+
+# Set on lazy wrappers only. A lazy wrapper delegates to ``container.get(factory)``,
+# which re-dereferences an implementation class back through the interface it
+# subclasses — a cycle. ``auto_bindings`` reads this to reject such a binding with
+# a clear error instead of letting resolution deadlock.
+_SINGLETON_LAZY_ATTR = "__fsd_singleton_lazy__"
+
 
 def _default_key(factory: Callable[..., Any]) -> str:
     """A namespaced, collision-free ``AppState`` key derived from the factory."""
@@ -146,6 +158,7 @@ def _build_eager(factory: Callable[..., T], key: str) -> Callable[..., T]:
         )
     )
     wrapper.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
+    setattr(wrapper, _SINGLETON_IMPL_ATTR, factory)
     return cast("Callable[..., T]", wrapper)
 
 
@@ -202,6 +215,8 @@ def _build_lazy(factory: Callable[..., T], key: str) -> Callable[..., T]:
             ),
         ]
     )
+    setattr(wrapper, _SINGLETON_IMPL_ATTR, factory)
+    setattr(wrapper, _SINGLETON_LAZY_ATTR, True)
     return cast("Callable[..., T]", wrapper)
 
 
