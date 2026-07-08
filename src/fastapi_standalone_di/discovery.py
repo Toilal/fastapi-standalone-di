@@ -36,7 +36,8 @@ def register_bindings(
     recursive: bool = False,
     warn_missing: bool = True,
 ) -> None:
-    """Import each subpackage's binding module and call its registration callable.
+    """Import each package's own and subpackages' binding modules and call their
+    registration callable.
 
     :param packages: the packages whose own binding module and subpackages are
         wired, each an imported module or a dotted name. Each package's own
