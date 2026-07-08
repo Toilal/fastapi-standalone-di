@@ -250,8 +250,9 @@ def patch_for_registrable_dependency_support() -> bool
 Patch `fastapi.params.Depends` so it resolves a `RegistrableDependency` eagerly.
 Only needed when FastAPI itself must see the concrete implementation at
 introspection time (e.g. for OpenAPI); `FastAPIContainer` does not require it. The
-patch only affects `Depends()` objects created afterwards — apply it at import
-time. Returns `True` if applied, `False` if already patched.
+patch mutates the class in place, so it affects every `Depends()` object
+regardless of when it was created — order relative to this call no longer
+matters. Returns `True` if applied, `False` if already patched.
 
 ### register_bindings
 

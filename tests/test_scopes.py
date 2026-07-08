@@ -13,7 +13,7 @@ from fastapi_standalone_di import (
     RegistrableDependency,
     ScopeError,
 )
-from fastapi_standalone_di.registration import _DEPENDS_SUPPORTS_SCOPE
+from fastapi_standalone_di._compat import DEPENDS_SUPPORTS_SCOPE
 
 CONTAINER = DependencyScope.CONTAINER
 SCOPED = DependencyScope.SCOPED
@@ -196,7 +196,7 @@ class TestScopeConfiguration:
         assert isinstance(await c.get(ServiceA), ServiceA)
 
     @pytest.mark.skipif(
-        not _DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
+        not DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
     )
     async def test_default_scope_dict_subdep_scope_absent_falls_back(self) -> None:
         # get_conn carries scope="request", absent from the dict -> fall back to
@@ -208,7 +208,7 @@ class TestScopeConfiguration:
         assert isinstance(await c.get(parent), Conn)  # type: ignore[arg-type]
 
     @pytest.mark.skipif(
-        not _DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
+        not DEPENDS_SUPPORTS_SCOPE, reason="FastAPI Depends() has no scope= param"
     )
     async def test_default_scope_dict_maps_fastapi_depends_scope(self) -> None:
         def parent(conn: Conn = Depends(get_conn, scope="request")) -> Conn:  # type: ignore[call-arg]
