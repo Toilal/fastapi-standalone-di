@@ -353,6 +353,100 @@ The [`get_container`](./api.md#get_container) dependency completes the picture:
 register a container in `app_state` under `"container"` and any dependency can
 retrieve the active container by depending on `get_container`.
 
+Singletons
+----------
+
+[`singleton`](./api.md#singleton) turns a dependency factory into an
+application-lifetime singleton: its instance is built lazily on first access,
+cached in the [`AppState`](./api.md#appstate), and reused thereafter. Because the
+store is the `AppState`, the same instance is shared **across requests** in ASGI
+(via `request.app.state`) and **across containers** standalone (when they share an
+`AppState`) — the cache gate lives inside the dependency both engines invoke.
+
+```python
+import asyncio
+
+from fastapi import Depends
+
+from fastapi_standalone_di import FastAPIContainer, singleton
+
+
+class Settings:
+    url = "postgres://localhost/app"
+
+
+class Database:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+@singleton(key="db")
+def get_db(settings: Settings = Depends(Settings)) -> Database:
+    return Database(settings.url)  # body runs once; result cached in app_state["db"]
+
+
+async def main() -> None:
+    async with FastAPIContainer() as container:
+        first = await container.get(get_db)
+        second = await container.get(get_db)
+        assert first is second
+        assert first.url == "postgres://localhost/app"
+
+
+asyncio.run(main())
+```
+
+Use it with `Depends(get_db)` in a route or `container.get(get_db)` standalone —
+same instance either way. `key` names the `AppState` entry; sharing it with
+`set_app_state_value("db", ...)` presets the singleton (the preset short-circuits
+construction). Omit `key` for a namespaced, collision-free default.
+
+By default (**eager** mode) the factory *body* runs once, while its `Depends(...)`
+sub-tree is re-resolved on each access — fine for cheap sub-dependencies; make
+expensive ones singletons too (it composes). Eager mode rejects generator
+factories: there is no application-lifetime owner for their teardown.
+
+For a `yield` singleton (or to resolve the sub-tree exactly once), pass
+`lazy=True`. Construction is then delegated to the container reachable via
+[`get_container`](./api.md#get_container), which owns the teardown and runs it at
+`aclose()` — application shutdown:
+
+```python
+import asyncio
+from collections.abc import AsyncIterator
+
+from fastapi_standalone_di import FastAPIContainer, singleton
+
+
+class Client:
+    async def close(self) -> None: ...
+
+
+@singleton(key="client", lazy=True)
+async def get_client() -> AsyncIterator[Client]:
+    client = Client()
+    try:
+        yield client
+    finally:
+        await client.close()  # runs at container close == app shutdown
+
+
+async def main() -> None:
+    async with FastAPIContainer() as container:
+        first = await container.get(get_client)
+        second = await container.get(get_client)
+        assert first is second
+    # client.close() has run here
+
+
+asyncio.run(main())
+```
+
+In ASGI, `lazy=True` requires a container registered in `app_state` (e.g.
+`app.state.container = FastAPIContainer(app_state=AppState.from_app(app))` at
+startup) so `get_container` can reach it; standalone, the resolving container
+provides itself.
+
 Dependency scopes
 -----------------
 

@@ -24,6 +24,7 @@ from fastapi_standalone_di.resolve import (
     ScopeError,
     get_container,
 )
+from fastapi_standalone_di.singleton import singleton
 
 __version__ = "0.3.0"
 
@@ -47,4 +48,5 @@ __all__ = [
     "patch_for_registrable_dependency_support",
     "register_bindings",
     "set_app_state_value",
+    "singleton",
 ]

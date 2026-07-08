@@ -465,14 +465,19 @@ class FastAPIContainer:
         self._container_locks: dict[Callable[..., Any], asyncio.Lock] = {}
 
     def _seed_container_instances(self) -> None:
-        """Pre-populate the ``get_app_state`` instance unless it is overridden.
+        """Pre-populate the ``get_app_state`` and ``get_container`` instances.
 
-        Seeding lets ``get_app_state`` resolve without a live request. An
-        override for it takes precedence: leaving the key unseeded lets
+        Seeding ``get_app_state`` lets it resolve without a live request, and
+        seeding ``get_container`` makes ``Depends(get_container)`` yield the
+        resolving container itself (used by lazy ``singleton``s) without the
+        container having to register itself in its own ``AppState``. An override
+        for either takes precedence: leaving the key unseeded lets
         :meth:`_resolve_single` route through :meth:`_apply_overrides`.
         """
         if get_app_state not in self._dependency_overrides:
             self._container_instances[get_app_state] = self._app_state
+        if get_container not in self._dependency_overrides:
+            self._container_instances[get_container] = self
 
     def clear_cache(self) -> None:
         """Drop all cached container-scoped instances.
