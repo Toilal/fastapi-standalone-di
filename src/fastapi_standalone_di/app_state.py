@@ -44,10 +44,10 @@ class AppState:
 
     # --- read / write ---------------------------------------------------------
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str, default: Any = None) -> Any:
         if self._state is not None:
-            return getattr(self._state, key, None)
-        return self._store.get(key)
+            return getattr(self._state, key, default)
+        return self._store.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
         if self._state is not None:

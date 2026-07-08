@@ -26,6 +26,7 @@ from fastapi_standalone_di import (
     patch_for_registrable_dependency_support,
     register_bindings,
     set_app_state_value,
+    singleton,
 )
 ```
 
@@ -188,7 +189,41 @@ def get_container(app_state: AppState = Depends(get_app_state)) -> FastAPIContai
 FastAPI dependency returning the active `FastAPIContainer`. Register the container
 in `app_state` at startup, e.g. via
 `set_app_state_value("container", FastAPIContainer(...))`. Raises `RuntimeError`
-if no container is registered.
+if no container is registered. When resolved *through* a container, it yields that
+container itself, so `Depends(get_container)` works standalone without registering
+anything.
+
+### singleton
+
+```python
+def singleton(
+    factory: Callable[..., T] | None = None,
+    *,
+    key: str | None = None,
+    lazy: bool = False,
+) -> Callable[..., T] | Callable[[Callable[..., T]], Callable[..., T]]
+```
+
+Turn a dependency factory into an application-lifetime singleton: its instance is
+built lazily on first access, cached in [`AppState`](#appstate), and reused
+thereafter — identically under FastAPI (shared across requests via
+`request.app.state`) and standalone (shared across containers sharing the same
+`AppState`). Usable functionally (`get_db = singleton(build_db, key="db")`), as a
+bare decorator (`@singleton`), or a parametrised one (`@singleton(key="db")`). The
+result is a drop-in dependency for `Depends(...)` or `container.get(...)`.
+
+- `key` — the `AppState` key under which the instance is cached. Defaults to a
+  namespaced id derived from the factory. Sharing a key with
+  [`set_app_state_value`](#set_app_state_value) presets/overrides the instance (a
+  preset short-circuits construction).
+- `lazy` — resolution semantics:
+    - `False` (default, *eager*) — the factory body runs at most once, but its
+      `Depends(...)` sub-tree is re-resolved on each access; no container is
+      required. Generator (`yield`) factories are rejected (`TypeError`).
+    - `True` (*lazy*) — construction is delegated to the container reachable via
+      [`get_container`](#get_container); the sub-tree is resolved exactly once and
+      the container owns any `yield` teardown (run at `aclose()` == application
+      shutdown).
 
 Registrable dependencies
 ------------------------

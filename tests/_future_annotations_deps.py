@@ -7,9 +7,32 @@ applies to the whole file.
 
 from __future__ import annotations
 
+from fastapi import Depends
+
 # Must stay a runtime import: FastAPI evaluates these annotations at
 # introspection time to detect the connection parameters, even under PEP 563.
 from starlette.requests import HTTPConnection, Request  # noqa: TC002
+
+
+class FutureSettings:
+    def __init__(self, url: str = "sqlite://") -> None:
+        self.url = url
+
+
+def get_future_settings() -> FutureSettings:
+    return FutureSettings()
+
+
+class FutureDb:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def build_future_db(
+    settings: FutureSettings = Depends(get_future_settings),
+) -> FutureDb:
+    """A singleton factory whose ``Depends`` annotation is a PEP 563 string."""
+    return FutureDb(settings.url)
 
 
 def needs_request(request: Request) -> str:
