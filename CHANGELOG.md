@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.5.1 (2026-07-08)
+
+### Bug Fixes
+
+- Bind the passed package's own module in register_bindings
+  ([#44](https://github.com/Toilal/fastapi-standalone-di/pull/44),
+  [`8ee830f`](https://github.com/Toilal/fastapi-standalone-di/commit/8ee830ff34fe8300286456cab086d8ebf94b5a24))
+
+- Wire a package's own binding module in register_bindings
+  ([#44](https://github.com/Toilal/fastapi-standalone-di/pull/44),
+  [`8ee830f`](https://github.com/Toilal/fastapi-standalone-di/commit/8ee830ff34fe8300286456cab086d8ebf94b5a24))
+
+
 ## v0.5.0 (2026-07-08)
 
 ### Features
