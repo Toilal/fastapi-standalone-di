@@ -896,3 +896,18 @@ class TestCyclicDependency:
         second = await c.get(ICyclic.dependency())
         assert first is second
         assert type(first).__name__ == "RedisCache"
+
+    async def test_build_time_cycle_raises(self) -> None:
+        # A cycle in the Depends graph recurses in FastAPI's tree build (before
+        # any resolution). Two functions depending on each other, wired via
+        # __defaults__ so the cycle is structural and independent of the global
+        # Depends patch — the same recursion the #51 registrable case hits.
+        def cyc_a(dep: object = None) -> None: ...
+
+        def cyc_b(dep: object = Depends(cyc_a)) -> None: ...
+
+        cyc_a.__defaults__ = (Depends(cyc_b),)
+
+        c = FastAPIContainer()
+        with pytest.raises(CyclicDependencyError, match="cycle"):
+            await c.get(cyc_a)

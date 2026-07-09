@@ -178,10 +178,17 @@ class ScopeError(RuntimeError):
 class CyclicDependencyError(RuntimeError):
     """Raised when a dependency depends on itself, directly or transitively.
 
-    The resolver serialises concurrent builds of a shared dependency on a
-    per-callable lock; a dependency that re-enters its own in-flight build (a
-    cycle) would wait on that lock forever. Detecting the re-entry turns the
-    deadlock into this error. A common cause is a lazy
+    A cycle surfaces at one of two points, both turned into this error instead of
+    a failure that is hard to read:
+
+    * **Tree build** — FastAPI recurses through each ``Depends`` to build the
+      dependency tree; a cycle in that graph recurses until the interpreter's
+      limit (a ``RecursionError``).
+    * **Resolution** — the resolver serialises concurrent builds of a shared
+      dependency on a per-callable lock; a dependency that re-enters its own
+      in-flight build would wait on that lock forever.
+
+    A common cause is a lazy
     :func:`~fastapi_standalone_di.singleton.singleton` whose factory is the
     implementation class registered for the very interface it subclasses:
     resolving it dereferences back to the singleton.
@@ -1182,7 +1189,21 @@ def _get_dependant(
         if cached is not None:
             return cached
 
-    dependant = get_dependant(path="", call=call)
+    try:
+        dependant = get_dependant(path="", call=call)
+    except RecursionError as exc:
+        # FastAPI builds the dependency tree by recursing through each ``Depends``.
+        # A cycle in that graph — a dependency reachable from its own parameters,
+        # directly or through a RegistrableDependency indirection — recurses until
+        # the interpreter's limit rather than terminating. Surface it as the same
+        # cycle error the resolver raises for a resolution-time cycle.
+        name = getattr(call, "__qualname__", repr(call))
+        raise CyclicDependencyError(
+            f"building the dependency tree for {name} overflowed the recursion "
+            "limit. Its dependency graph has a cycle — a dependency that depends "
+            "on itself, directly or through a RegistrableDependency indirection. "
+            "Break the cycle in the dependency graph."
+        ) from exc
 
     if dependant_cache is not None:
         dependant_cache.set_dependant(call, dependant)

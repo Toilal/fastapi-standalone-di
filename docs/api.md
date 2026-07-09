@@ -151,10 +151,17 @@ without an active scope, or a `CONTAINER`-scoped dependency depending on a
 
 ### CyclicDependencyError
 
-`RuntimeError` subclass raised when a dependency re-enters its own in-flight
-build — a cycle. Without detection the resolver, which serialises concurrent
-builds of a shared dependency on a per-callable lock, would wait on that lock
-forever. A common cause is a lazy [`singleton`](#singleton) whose factory is the
+`RuntimeError` subclass raised when a dependency depends on itself, directly or
+transitively. A cycle surfaces at either of two points, both turned into this
+error rather than a hard-to-read failure:
+
+- **Tree build** — FastAPI recurses through each `Depends` to build the tree; a
+  cycle recurses until the interpreter's limit (a `RecursionError`).
+- **Resolution** — the resolver serialises concurrent builds of a shared
+  dependency on a per-callable lock; a dependency that re-enters its own in-flight
+  build would wait on that lock forever.
+
+A common cause is a lazy [`singleton`](#singleton) whose factory is the
 implementation class registered for the very interface it subclasses: resolving
 it dereferences back to the singleton. Make such a singleton eager, or register a
 lazy singleton **factory function** instead of the class.
