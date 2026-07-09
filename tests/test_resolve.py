@@ -16,6 +16,7 @@ from fastapi_standalone_di import (
     FastAPIContainer,
     RegistrableDependency,
     ResolvedDependencies,
+    get_container,
     singleton,
 )
 
@@ -873,17 +874,32 @@ class TestCyclicDependency:
         ICyclic.register(None)
         AppState.reset_standalone()
 
-    async def test_lazy_singleton_on_implementation_class_raises(self) -> None:
-        # The #49 scenario: a lazy singleton whose factory is the implementation
-        # class registered for its own interface. container.get(factory)
-        # dereferences back to the singleton wrapper.
+    async def test_lazy_singleton_resolving_its_own_interface_raises(self) -> None:
+        # A genuine runtime cycle the fix must NOT mask: a lazy singleton whose
+        # factory re-resolves, at run time, the very interface it is registered
+        # for. Resolving the wrapper re-enters its own in-flight build.
+        async def build(container: FastAPIContainer = Depends(get_container)) -> object:
+            return await container.get(ICyclic)
+
+        ICyclic.register(singleton(build, lazy=True))
+        c = FastAPIContainer()
+        with pytest.raises(CyclicDependencyError):
+            await asyncio.wait_for(c.get(ICyclic.dependency()), timeout=5)
+
+    async def test_lazy_singleton_on_implementation_class_resolves(self) -> None:
+        # The #49 scenario, now supported: a lazy singleton whose factory is the
+        # implementation class registered for its own interface. The lazy wrapper
+        # builds the class directly instead of dereferencing back through the
+        # interface, so there is no re-entry.
         class RedisCache(ICyclic):
             def __init__(self) -> None: ...
 
         ICyclic.register(singleton(RedisCache, lazy=True))
         c = FastAPIContainer()
-        with pytest.raises(CyclicDependencyError):
-            await asyncio.wait_for(c.get(ICyclic.dependency()), timeout=5)
+        first = await asyncio.wait_for(c.get(ICyclic.dependency()), timeout=5)
+        second = await c.get(ICyclic.dependency())
+        assert first is second
+        assert type(first).__name__ == "RedisCache"
 
     async def test_eager_singleton_on_implementation_class_is_fine(self) -> None:
         # The eager counterpart builds the class directly — no re-entry.
