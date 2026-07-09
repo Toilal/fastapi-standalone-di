@@ -12,6 +12,7 @@ from fastapi_standalone_di.discovery import (
     auto_bindings,
     register_bindings,
 )
+from fastapi_standalone_di.provides import provides
 from fastapi_standalone_di.registration import (
     RegistrableDependency,
     patch_for_registrable_dependency_support,
@@ -60,6 +61,7 @@ __all__ = [
     "get_app_state",
     "get_container",
     "patch_for_registrable_dependency_support",
+    "provides",
     "register_bindings",
     "set_app_state_value",
     "singleton",

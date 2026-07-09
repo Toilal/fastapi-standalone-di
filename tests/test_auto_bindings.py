@@ -71,6 +71,26 @@ def _singleton_impl(
     )
 
 
+def _provides_factory(
+    name: str,
+    returns: str,
+    returns_module: str,
+    *,
+    singleton: bool = False,
+    lazy: bool = False,
+) -> str:
+    """A ``@provides`` factory *function* returning ``returns`` — an interface or a
+    concrete implementation of one — optionally also a ``@singleton``."""
+    imports = ["from fastapi_standalone_di import provides"]
+    decorators = ["@provides"]
+    if singleton:
+        imports.append("from fastapi_standalone_di import singleton")
+        decorators.insert(0, "@singleton(lazy=True)" if lazy else "@singleton")
+    imports.append(f"from {_ROOT}.{returns_module} import {returns}")
+    body = "\n".join(imports) + "\n\n\n" + "\n".join(decorators) + "\n"
+    return f"{body}def {name}() -> {returns}:\n    return {returns}()\n"
+
+
 def _trap(message: str = "module must not be imported") -> str:
     """A module that raises on import — proof it was (not) imported."""
     return f"raise RuntimeError({message!r})\n"
@@ -517,6 +537,229 @@ class TestAutoBindings:
         assert result == [Binding(icache, icache.impl, False)]
         assert not isinstance(icache.impl, type)
 
+    def test_binds_provides_factory_returning_interface(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A ``@provides`` factory function has no bases, so it is matched by its
+        # return annotation being the interface. Used alone (no @singleton), the
+        # function itself is registered and rebuilt on every resolution.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
+        assert icache.impl is build_cache
+
+    async def test_binds_singleton_provides_factory(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # ``@singleton @provides`` composes: @provides marks it an implementation,
+        # @singleton wraps it, and the wrapper (carrying the propagated mark) is
+        # what gets registered — so the singleton gate survives.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache", singleton=True
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        wrapper = icache.impl
+        assert result == [Binding(icache, wrapper, False)]
+        assert not isinstance(wrapper, type)
+        assert wrapper.__name__ == "build_cache"
+
+        AppState.reset_standalone()
+        try:
+            async with FastAPIContainer() as container:
+                first = await container.get(icache.dependency())
+                second = await container.get(icache.dependency())
+        finally:
+            AppState.reset_standalone()
+        assert first is second
+        assert type(first).__name__ == "ICache"
+
+    def test_binds_provides_factory_returning_implementation(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The marker declares intent, so a factory may annotate a concrete
+        # *implementation* of the interface; it is matched by the return type's
+        # direct interface bases, exactly like an implementation class. The
+        # returned class is abstract here, so it is not itself a bare candidate.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    "import abc\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "class RedisCache(ICache, abc.ABC):\n"
+                    "    @abc.abstractmethod\n"
+                    "    def ping(self) -> None: ...\n"
+                ),
+                "infra/factory.py": (
+                    "from fastapi_standalone_di import provides\n"
+                    f"from {_ROOT}.infra.redis import RedisCache\n\n\n"
+                    "@provides\n"
+                    "def build_cache() -> RedisCache:\n"
+                    "    raise NotImplementedError\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
+
+    def test_provides_without_return_type_is_reported(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # @provides promises an implementation, so a missing return annotation
+        # carries no interface to match and is a reported misuse — not ignored.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": (
+                    "from fastapi_standalone_di import provides\n\n\n"
+                    "@provides\n"
+                    "def build():\n"
+                    "    return object()\n"
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError) as excinfo:
+            auto_bindings(root)
+        message = str(excinfo.value)
+        assert "build" in message
+        assert "@provides has no resolvable return type" in message
+
+    def test_provides_returning_unrelated_type_is_reported(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A @provides returning a type unrelated to RegistrableDependency cannot
+        # implement any interface — reported, since the marker promised one.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": (
+                    "from fastapi_standalone_di import provides\n\n\n"
+                    "@provides\n"
+                    "def build() -> int:\n"
+                    "    return 0\n"
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError) as excinfo:
+            auto_bindings(root)
+        message = str(excinfo.value)
+        assert "build" in message
+        assert "not a RegistrableDependency interface" in message
+
+    def test_undecorated_factory_function_is_ignored(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # @provides is mandatory on a factory function: a plain function returning
+        # an interface is not one and is left alone, so the interface is unmatched.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": (
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "def build() -> ICache:\n"
+                    "    return ICache()\n"
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError, match="no matching implementation"):
+            auto_bindings(root)
+
+    def test_provides_on_class_is_optional_noop(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # @provides is optional on a class: it is wired by its hierarchy as usual,
+        # the marker being ignored (it will carry future options like primary=).
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    "from fastapi_standalone_di import provides\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "@provides\n"
+                    "class RedisCache(ICache): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert result == [Binding(icache, icache.impl, False)]
+        assert icache.impl.__name__ == "RedisCache"
+        assert isinstance(icache.impl, type)
+
+    def test_provides_on_singleton_class_is_noop(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # @singleton on a class yields a function wrapper (not a type) that unwraps
+        # to the class; @provides on top of it must stay a no-op — the class is
+        # wired by its hierarchy, not treated as a (return-less) factory function.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    "from fastapi_standalone_di import provides, singleton\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "@provides\n"
+                    "@singleton\n"
+                    "class RedisCache(ICache):\n"
+                    "    def __init__(self) -> None: ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert result == [Binding(icache, icache.impl, False)]
+        assert icache.impl.__name__ == "RedisCache"
+        assert not isinstance(icache.impl, type)  # the singleton wrapper
+
+    def test_factory_and_class_for_same_interface_is_ambiguous(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A @provides factory and a bare class both implementing the same
+        # interface is a genuine ambiguity, resolved via conflict_solver.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache"
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError, match="several matching implementations"):
+            auto_bindings(root)
+
+        candidates: list[Callable[..., object]] = []
+
+        def solver(
+            interface: type[RegistrableDependency],
+            impls: list[Callable[..., object]],
+        ) -> Callable[..., object] | None:
+            candidates.extend(impls)
+            return next(i for i in impls if i.__name__ == "build_cache")
+
+        result = auto_bindings(root, conflict_solver=solver)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert {i.__name__ for i in candidates} == {"MemCache", "build_cache"}
+        assert result == [Binding(icache, icache.impl, False)]
+        assert icache.impl.__name__ == "build_cache"
+
 
 class TestAstPrefilter:
     """The default ``ast=True`` static pre-filter: only modules that can hold an
@@ -539,6 +782,46 @@ class TestAstPrefilter:
         result = auto_bindings(root)
         assert [b.interface.__name__ for b in result] == ["ICache"]
         assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_imports_provides_factory_module_without_class(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A module holding only a ``@provides`` factory declares no class, so the
+        # marker decorator is what keeps it: it is imported and wired, while an
+        # unrelated trap module is still skipped.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache"
+                ),
+                "routers/users.py": _trap(),
+            }
+        )
+        result = auto_bindings(root)
+        assert [b.interface.__name__ for b in result] == ["ICache"]
+        assert result[0].implementation.__name__ == "build_cache"
+
+    def test_imports_aliased_provides_factory_module(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The @provides decorator is recognised through an ``as`` alias, so the
+        # factory module is still imported by the pre-filter.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": (
+                    "from fastapi_standalone_di import provides as prov\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "@prov\n"
+                    "def build_cache() -> ICache:\n"
+                    "    return ICache()\n"
+                ),
+                "routers/users.py": _trap(),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "build_cache"
 
     def test_skips_interface_consumer_that_does_not_subclass(
         self, make_package: Callable[[dict[str, str]], str]

@@ -29,10 +29,13 @@ import pkgutil
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from types import ModuleType
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple, cast, get_type_hints
 
+from fastapi_standalone_di.provides import _PROVIDES_MARKER, provides
 from fastapi_standalone_di.registration import RegistrableDependency
 from fastapi_standalone_di.singleton import _SINGLETON_IMPL_ATTR
+
+_PROVIDES_NAME = provides.__name__
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +179,9 @@ class AutoBindingError(ValueError):
     """Raised when :func:`auto_bindings` cannot wire every discovered interface.
 
     Aggregates all wiring gaps found in a single scan: interfaces with no
-    matching implementation, and ambiguous interfaces (several candidates that no
-    ``conflict_solver`` resolved). Nothing is registered when it is raised.
+    matching implementation, ambiguous interfaces (several candidates that no
+    ``conflict_solver`` resolved), and ``@provides`` functions carrying no
+    interface return type. Nothing is registered when it is raised.
     """
 
 
@@ -194,7 +198,10 @@ class Binding(NamedTuple):
     already_bound: bool
 
 
-ConflictSolver = Callable[[type[RegistrableDependency], list[type]], type | None]
+ConflictSolver = Callable[
+    [type[RegistrableDependency], list[Callable[..., Any]]],
+    Callable[..., Any] | None,
+]
 
 
 def auto_bindings(
@@ -213,6 +220,16 @@ def auto_bindings(
     **direct** base — the class-hierarchy equivalent of the hand-written
     ``register()`` calls that :func:`register_bindings` discovers.
 
+    An implementation may also be a **factory function** marked with
+    :func:`~fastapi_standalone_di.provides.provides`, matched by its return
+    annotation (the interface, or a concrete implementation of it) since a
+    function has no bases. Combined with
+    :func:`~fastapi_standalone_di.singleton.singleton`, the singleton wrapper is
+    what gets registered, so its gate survives. A ``@provides`` whose return type
+    carries no interface at all (``Any``, missing, or unrelated to
+    ``RegistrableDependency``) is reported as an error (see
+    :class:`AutoBindingError`).
+
     :param packages: packages that may hold **both** interfaces and
         implementations, scanned once for both roles. Each is a dotted name or an
         imported module; a leading ``.`` is anchored to the caller's package,
@@ -224,9 +241,10 @@ def auto_bindings(
         across a subtree.
     :param conflict_solver: optional tie-breaker called once per interface that
         has two or more matching implementations, with the interface class and
-        the ordered candidate classes. It returns the chosen candidate (must be
-        one of them), or ``None`` to leave the ambiguity unresolved. Without it,
-        an ambiguity is an error.
+        the ordered candidates (each an implementation class or a ``@provides``
+        function). It returns the chosen candidate (must be one of them), or
+        ``None`` to leave the ambiguity unresolved. Without it, an ambiguity is
+        an error.
     :param ast: pre-filter the scanned tree by static analysis so only modules
         that *can* hold an interface or an implementation are ever imported
         (default ``True``). Without it, every module in the scanned packages is
@@ -243,9 +261,9 @@ def auto_bindings(
     An interface is bound to its single matching implementation. An interface
     that already carries its own implementation is left untouched and reported
     with ``already_bound=True``. Resolution and registration are two phases: if
-    any interface has zero matches, or an unresolved ambiguity, nothing is
-    registered and an :class:`AutoBindingError` aggregating every problem is
-    raised.
+    any interface has zero matches, an unresolved ambiguity, or a ``@provides``
+    carries no interface return type, nothing is registered and an
+    :class:`AutoBindingError` aggregating every problem is raised.
 
     :returns: every discovered interface that ends up with an implementation —
         both freshly bound (``already_bound=False``) and pre-existing
@@ -267,7 +285,9 @@ def auto_bindings(
 
     found: list[type] = []
     candidates: list[type] = []
-    targets: dict[type, Callable[..., Any]] = {}
+    provider_impls: list[tuple[Callable[..., Any], type]] = []
+    provider_errors: list[tuple[Callable[..., Any], str]] = []
+    targets: dict[Callable[..., Any], Callable[..., Any]] = {}
     members = _scan_members(
         interface_roots,
         implementation_roots,
@@ -281,6 +301,15 @@ def auto_bindings(
             if _under_any(member.__module__, interface_names):
                 found.append(member)
             continue
+        role = _provides_role(member)
+        if role is not None:
+            if _under_any(member.__module__, implementation_names):
+                kind, payload = role
+                if kind == "impl":
+                    provider_impls.append((member, payload))
+                else:
+                    provider_errors.append((member, payload))
+            continue
         impl = _impl_class(member)
         if impl is None or inspect.isabstract(impl):
             continue
@@ -288,16 +317,22 @@ def auto_bindings(
             candidates.append(impl)
             targets[impl] = member
 
-    by_interface: dict[type, list[type]] = {interface: [] for interface in found}
+    by_interface: dict[type, list[Callable[..., Any]]] = {i: [] for i in found}
     for impl in candidates:
         for base in impl.__bases__:
             if base in by_interface:
                 by_interface[base].append(impl)
+    for provider, returned in provider_impls:
+        matched_interfaces = _provides_interfaces(returned, by_interface)
+        for interface in matched_interfaces:
+            by_interface[interface].append(provider)
+        if matched_interfaces:
+            targets[provider] = provider
 
     planned: list[Binding] = []
     preexisting: list[Binding] = []
     unmatched: list[type] = []
-    ambiguous: list[tuple[type, list[type]]] = []
+    ambiguous: list[tuple[type, list[Callable[..., Any]]]] = []
     for interface in found:
         iface = cast("type[RegistrableDependency]", interface)
         own_impl = interface.__dict__.get("_impl")
@@ -324,8 +359,8 @@ def auto_bindings(
             else:
                 planned.append(Binding(iface, targets[chosen], False))
 
-    if unmatched or ambiguous:
-        raise AutoBindingError(_format_problems(unmatched, ambiguous))
+    if unmatched or ambiguous or provider_errors:
+        raise AutoBindingError(_format_problems(unmatched, ambiguous, provider_errors))
 
     for binding in planned:
         binding.interface.register(binding.implementation)
@@ -365,6 +400,80 @@ def _impl_class(member: object) -> type | None:
     return wrapped if isinstance(wrapped, type) else None
 
 
+def _return_class(factory: Callable[..., Any]) -> type | None:
+    """The class a factory's return annotation resolves to, or ``None``.
+
+    Resolves string annotations against the factory's own module (so it works
+    under ``from __future__ import annotations``). Anything that is not a plain
+    class once resolved — a missing annotation, ``Any``, a union, an
+    unresolvable forward reference — yields ``None``: the factory carries no
+    class-shaped return type to match an interface on.
+    """
+    try:
+        hints = get_type_hints(factory)
+    except Exception:
+        return None
+    returned = hints.get("return")
+    return returned if isinstance(returned, type) else None
+
+
+def _provides_role(member: object) -> tuple[str, Any] | None:
+    """Classify a ``@provides``-marked function for auto-binding.
+
+    A ``@provides`` function declares itself the implementation of the interface
+    its return annotation names — the interface itself, or a concrete
+    implementation of it — since a function has no bases to match on. When the
+    function is also ``@singleton``, the wrapped factory sits under
+    ``_SINGLETON_IMPL_ATTR`` and carries the real return annotation; the wrapper
+    is what gets registered, so the singleton gate survives.
+
+    - ``("impl", returned)`` — the return type is ``RegistrableDependency``-related
+      (an interface or an implementation of one). The interfaces it actually
+      binds are resolved from *returned* like an implementation class: its direct
+      interface bases, plus *returned* itself when it is an interface.
+    - ``("error", reason)`` — the marker promises an implementation, but the
+      return type carries no interface at all (``Any``, missing, unresolvable, or
+      unrelated to ``RegistrableDependency``); *reason* explains the misuse.
+    - ``None`` — *member* is not a ``@provides`` function. A ``@provides`` *class*
+      is one too — including a ``@singleton`` class, whose wrapper unwraps to a
+      class: it is wired by its hierarchy like any class, so the marker is ignored
+      here.
+    """
+    if isinstance(member, type) or not getattr(member, _PROVIDES_MARKER, False):
+        return None
+    underlying: Any = getattr(member, _SINGLETON_IMPL_ATTR, member)
+    if isinstance(underlying, type):
+        return None
+    returned = _return_class(underlying)
+    if returned is None:
+        return (
+            "error",
+            "has no resolvable return type; annotate the interface it builds "
+            "(or an implementation of that interface)",
+        )
+    if not issubclass(returned, RegistrableDependency):
+        return (
+            "error",
+            f"returns {_qualname(returned)}, which is not a RegistrableDependency "
+            "interface or an implementation of one",
+        )
+    return ("impl", returned)
+
+
+def _provides_interfaces(
+    returned: type, by_interface: dict[type, list[Callable[..., Any]]]
+) -> list[type]:
+    """The discovered interfaces a ``@provides`` returning *returned* implements.
+
+    Mirrors how an implementation class is matched — by *returned*'s direct
+    interface bases — and additionally binds *returned* itself when it is one of
+    the discovered interfaces (the function returning the interface directly).
+    """
+    interfaces = [returned] if returned in by_interface else []
+    interfaces.extend(base for base in returned.__bases__ if base in by_interface)
+    return interfaces
+
+
 def _scan_members(
     interface_roots: list[ModuleType],
     implementation_roots: list[ModuleType],
@@ -385,7 +494,8 @@ def _scan_members(
     members: dict[str, Any] = {}
     for module in modules:
         for obj in vars(module).values():
-            if _impl_class(obj) is not None and obj.__module__ == module.__name__:
+            relevant = _impl_class(obj) is not None or _provides_role(obj) is not None
+            if relevant and obj.__module__ == module.__name__:
                 members[f"{obj.__module__}.{obj.__qualname__}"] = obj
     return list(members.values())
 
@@ -442,7 +552,9 @@ def _select_modules_ast(
       ``RegistrableDependency``: only these can define an interface. Importing
       them yields the concrete interface classes.
     - Pass 2 keeps every remaining module whose source declares a class based on
-      one of those interfaces: only these can define a matching implementation.
+      one of those interfaces (a concrete implementation) or decorates a function
+      with ``@provides`` (a factory implementation, whatever it returns — so a
+      mis-annotated one is imported and reported, not skipped silently).
 
     A module whose source cannot be read or parsed, or that carries a base class
     the analysis cannot resolve statically, is imported unconditionally — the
@@ -489,6 +601,7 @@ def _select_modules_ast(
         if (
             analysis is None
             or analysis.has_unresolved_base
+            or analysis.has_provider
             or analysis.base_names & interface_class_names
         ):
             imported.setdefault(name, importlib.import_module(name))
@@ -542,10 +655,14 @@ class _ModuleAnalysis(NamedTuple):
     ``base_names`` holds, per class base, the *original* imported simple name
     (an ``as`` alias is resolved back), so it can be matched against the
     discovered interface class names regardless of how the module aliased them.
+    ``has_provider`` is ``True`` when the source decorates a function with
+    ``@provides`` (the alias resolved back), so a factory implementation is found
+    whatever its return annotation.
     """
 
     defines_marker_subclass: bool
     base_names: frozenset[str]
+    has_provider: bool
     has_unresolved_base: bool
 
 
@@ -569,8 +686,18 @@ def _analyze_module(source: bytes | None) -> _ModuleAnalysis | None:
 
     base_names: set[str] = set()
     defines_marker = False
+    has_provider = False
     unresolved = False
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                target = (
+                    decorator.func if isinstance(decorator, ast.Call) else decorator
+                )
+                simple = _base_simple_name(target)
+                if simple is not None and aliases.get(simple, simple) == _PROVIDES_NAME:
+                    has_provider = True
+            continue
         if not isinstance(node, ast.ClassDef):
             continue
         for base in node.bases:
@@ -585,7 +712,9 @@ def _analyze_module(source: bytes | None) -> _ModuleAnalysis | None:
             elif star_import and simple not in aliases:
                 unresolved = True
 
-    return _ModuleAnalysis(defines_marker, frozenset(base_names), unresolved)
+    return _ModuleAnalysis(
+        defines_marker, frozenset(base_names), has_provider, unresolved
+    )
 
 
 def _base_simple_name(node: ast.expr) -> str | None:
@@ -632,16 +761,18 @@ def _under_any(module_name: str, roots: set[str]) -> bool:
     )
 
 
-def _class_key(cls: type) -> tuple[str, str]:
-    return (cls.__module__, cls.__qualname__)
+def _class_key(obj: Any) -> tuple[str, str]:
+    return (obj.__module__, obj.__qualname__)
 
 
-def _qualname(cls: type) -> str:
-    return f"{cls.__module__}.{cls.__qualname__}"
+def _qualname(obj: Any) -> str:
+    return f"{obj.__module__}.{obj.__qualname__}"
 
 
 def _format_problems(
-    unmatched: list[type], ambiguous: list[tuple[type, list[type]]]
+    unmatched: list[type],
+    ambiguous: list[tuple[type, list[Callable[..., Any]]]],
+    provider_errors: list[tuple[Callable[..., Any], str]],
 ) -> str:
     lines = ["auto_bindings could not wire every interface:"]
     for interface in sorted(unmatched, key=_class_key):
@@ -651,4 +782,8 @@ def _format_problems(
         lines.append(
             f"  - {_qualname(interface)}: several matching implementations ({names})"
         )
+    for provider, reason in sorted(
+        provider_errors, key=lambda entry: _class_key(entry[0])
+    ):
+        lines.append(f"  - {_qualname(provider)}: @provides {reason}")
     return "\n".join(lines)

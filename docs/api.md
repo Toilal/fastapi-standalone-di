@@ -29,6 +29,7 @@ from fastapi_standalone_di import (
     get_app_state,
     get_container,
     patch_for_registrable_dependency_support,
+    provides,
     register_bindings,
     set_app_state_value,
     singleton,
@@ -276,6 +277,28 @@ abstract interface inheriting `RegistrableDependency`, bind a concrete class wit
   `RuntimeError` when none is registered.
 - `Interface.impl` — class property returning the registered implementation.
 
+### provides
+
+```python
+def provides(fn: Callable[..., T]) -> Callable[..., T]
+```
+
+Mark a factory **function** as the implementation of the interface it returns, so
+[`auto_bindings`](#auto_bindings) wires it. An implementation *class* is matched by
+its hierarchy, but a function has no bases; `@provides` names the interface it
+implements through the function's return annotation — the interface itself, or a
+concrete implementation of it (matched by the returned type's direct interface
+bases, as for a class).
+
+- **Mandatory** on a factory function: a plain function returning an interface is
+  left alone.
+- **Optional** on a class (a no-op there — classes are wired by hierarchy).
+- Composes with [`singleton`](#singleton) in either decorator order; the tag
+  survives the wrapper, so the singleton wrapper is registered and its cache
+  survives. Used alone, the function is rebuilt on every resolution.
+- A return type carrying no interface — `Any`, missing, or unrelated to
+  `RegistrableDependency` — is reported as an [`AutoBindingError`](#autobindingerror).
+
 ### patch_for_registrable_dependency_support
 
 ```python
@@ -327,6 +350,7 @@ def auto_bindings(
     implementations: Sequence[str | ModuleType] = (),
     recursive: bool = True,
     conflict_solver: ConflictSolver | None = None,
+    ast: bool = True,
 ) -> list[Binding]
 ```
 
@@ -347,7 +371,12 @@ binds each interface to the implementation that declares it as a **direct** base
   it once at bootstrap.
 - `conflict_solver` — optional tie-breaker called once per interface with two or
   more matching implementations, with `(interface, impls)`; returns the chosen
-  candidate (one of `impls`) or `None` to leave the ambiguity unresolved.
+  candidate (one of `impls`, each an implementation class or a
+  [`@provides`](#provides) function) or `None` to leave the ambiguity unresolved.
+- `ast` — pre-filter the scanned tree by static analysis so only modules that can
+  hold an interface or implementation are imported (default `True`); set `False`
+  to import every module (running their import-time side effects) when
+  implementations are synthesised at import time and so invisible to the analysis.
 
 An interface that already carries its own implementation is left untouched and
 reported with `already_bound=True`. Resolution and registration are two phases:
@@ -357,11 +386,12 @@ problem is raised. Returns every resolved interface as a [`Binding`](#binding),
 freshly bound and pre-existing alike, ordered by the interface's module and
 qualified name.
 
-An implementation decorated with [`singleton`](#singleton) is discovered through
-the class it wraps and registered as the wrapper, so its application-lifetime
-cache is preserved. Only the default (eager) mode is supported: a lazy singleton
-implementation is rejected with an `AutoBindingError`, because resolving it
-re-enters the interface it subclasses and would deadlock the container.
+An implementation class decorated with [`singleton`](#singleton) (eager or lazy)
+is discovered through the class it wraps and registered as the wrapper, so its
+application-lifetime cache is preserved. A factory **function** is wired only when
+marked with [`provides`](#provides), matched by its return annotation (a function
+has no bases); a `@provides` carrying no interface return type is reported as an
+error.
 
 ### Binding
 
@@ -380,19 +410,24 @@ completeness) and `False` for one bound by the call itself.
 ### ConflictSolver
 
 ```python
-ConflictSolver = Callable[[type[RegistrableDependency], list[type]], type | None]
+ConflictSolver = Callable[
+    [type[RegistrableDependency], list[Callable[..., Any]]],
+    Callable[..., Any] | None,
+]
 ```
 
 Type alias for the [`auto_bindings`](#auto_bindings) `conflict_solver` callback:
-given an interface and its candidate implementations, return the chosen candidate
-or `None` to leave the ambiguity unresolved.
+given an interface and its candidate implementations (each an implementation class
+or a [`@provides`](#provides) function), return the chosen candidate or `None` to
+leave the ambiguity unresolved.
 
 ### AutoBindingError
 
 `ValueError` subclass raised by [`auto_bindings`](#auto_bindings) when it cannot
 wire every discovered interface, aggregating all wiring gaps found in one scan:
-interfaces with no matching implementation, and ambiguous interfaces that no
-`conflict_solver` resolved. Nothing is registered when it is raised.
+interfaces with no matching implementation, ambiguous interfaces that no
+`conflict_solver` resolved, and [`@provides`](#provides) functions carrying no
+interface return type. Nothing is registered when it is raised.
 
 Connection parameters
 ---------------------
