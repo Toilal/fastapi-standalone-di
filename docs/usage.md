@@ -359,7 +359,7 @@ default, and — unlike `register_bindings` — imports every module in the scan
 packages to inspect their classes, so call it once at bootstrap.
 
 When several implementations match one interface, mark the one to bind with
-[`@provides(primary=True)`](#provides) — it wins the tie with no extra wiring,
+[`@provides(primary=True)`](./api.md#provides) — it wins the tie with no extra wiring,
 whether it is a class or a factory function:
 
 ```python
@@ -430,10 +430,10 @@ def newest(
 auto_bindings("myapp", conflict_solver=newest)
 ```
 
-Each candidate is an implementation class or a [`@provides`](#provides) factory
+Each candidate is an implementation class or a [`@provides`](./api.md#provides) factory
 function (see below), so both `primary` and a `conflict_solver` see both.
 
-An implementation class may be decorated with [`singleton`](#singleton):
+An implementation class may be decorated with [`singleton`](./api.md#singleton):
 `auto_bindings` discovers it through the class it wraps and registers the wrapper,
 so the application-lifetime cache survives instead of being bound away. Both eager
 and lazy modes are wired this way.
@@ -457,7 +457,7 @@ auto_bindings("myapp")  # ICache -> the singleton wrapper of RedisCache
 
 `auto_bindings` matches implementation *classes* by their hierarchy — the
 interface is a direct base. A factory *function* has no bases, so mark it with
-[`provides`](#provides) and the interface it implements is read from its return
+[`provides`](./api.md#provides) and the interface it implements is read from its return
 annotation. This wires a dependency whose construction needs a factory (an
 `__init__` taking raw values, a value assembled from other dependencies) without
 a hand-written `register()` call.
