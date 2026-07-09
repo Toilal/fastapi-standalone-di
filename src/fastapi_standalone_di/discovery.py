@@ -265,14 +265,6 @@ def auto_bindings(
         if impl is None or inspect.isabstract(impl):
             continue
         if _under_any(impl.__module__, implementation_names):
-            if getattr(member, _SINGLETON_LAZY_ATTR, False):
-                raise AutoBindingError(
-                    f"{_qualname(impl)} is a lazy @singleton, which auto_bindings "
-                    "cannot wire to the interface it subclasses: resolving it would "
-                    "re-enter that interface and deadlock the container. Use the "
-                    "default (eager) @singleton on the implementation class, or "
-                    "register a lazy singleton factory function by hand."
-                )
             candidates.append(impl)
             targets[impl] = member
 
@@ -294,7 +286,7 @@ def auto_bindings(
             continue
         impls = sorted(by_interface[interface], key=_class_key)
         if len(impls) == 1:
-            planned.append(Binding(iface, targets[impls[0]], False))
+            planned.append(_planned_binding(iface, impls[0], targets[impls[0]]))
         elif not impls:
             unmatched.append(interface)
         elif conflict_solver is None:
@@ -310,7 +302,7 @@ def auto_bindings(
                     f"{[_qualname(i) for i in impls]}"
                 )
             else:
-                planned.append(Binding(iface, targets[chosen], False))
+                planned.append(_planned_binding(iface, chosen, targets[chosen]))
 
     if unmatched or ambiguous:
         raise AutoBindingError(_format_problems(unmatched, ambiguous))
@@ -337,6 +329,28 @@ def _resolve_roots(
             seen.add(module.__name__)
             roots.append(module)
     return roots
+
+
+def _planned_binding(
+    iface: type[RegistrableDependency], impl: type, target: Callable[..., Any]
+) -> Binding:
+    """The binding for *iface*'s selected implementation, rejecting a lazy singleton.
+
+    A lazy ``@singleton`` delegates to ``container.get(factory)``, which
+    re-dereferences the implementation class back through the interface it
+    subclasses — a cycle. Only an implementation actually chosen for an interface
+    is rejected; a stray lazy singleton matching nothing is ignored like any other
+    unmatched candidate.
+    """
+    if getattr(target, _SINGLETON_LAZY_ATTR, False):
+        raise AutoBindingError(
+            f"{_qualname(impl)} is a lazy @singleton, which auto_bindings cannot "
+            "wire to the interface it subclasses: resolving it would re-enter that "
+            "interface and deadlock the container. Use the default (eager) "
+            "@singleton on the implementation class, or register a lazy singleton "
+            "factory function by hand."
+        )
+    return Binding(iface, target, False)
 
 
 def _impl_class(member: object) -> type | None:

@@ -449,6 +449,30 @@ class TestAutoBindings:
             auto_bindings(root)
         assert icache._impl is None
 
+    def test_unmatched_lazy_singleton_is_ignored_not_rejected(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A lazy singleton that is not the implementation of any wired interface is
+        # ignored like any other unmatched candidate — only a *selected* lazy
+        # implementation is rejected.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "infra/lazy.py": (
+                    "from fastapi_standalone_di import singleton\n\n\n"
+                    "class Base:\n"
+                    "    def __init__(self) -> None: ...\n\n\n"
+                    "@singleton(lazy=True)\n"
+                    "class Standalone(Base): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert result == [Binding(icache, icache.impl, False)]
+        assert icache.impl.__name__ == "RedisCache"
+
     def test_conflict_solver_sees_singleton_underlying_class(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
