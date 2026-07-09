@@ -363,12 +363,15 @@ break the tie; it is called once per conflicting interface and returns the chose
 candidate (or `None` to leave the ambiguity as an error):
 
 ```python
+from collections.abc import Callable
+from typing import Any
+
 from fastapi_standalone_di import RegistrableDependency, auto_bindings
 
 
 def prefer_primary(
-    interface: type[RegistrableDependency], impls: list[type]
-) -> type | None:
+    interface: type[RegistrableDependency], impls: list[Callable[..., Any]]
+) -> Callable[..., Any] | None:
     primary = [impl for impl in impls if impl.__module__.startswith("myapp.primary")]
     return primary[0] if len(primary) == 1 else None
 
@@ -376,9 +379,13 @@ def prefer_primary(
 auto_bindings("myapp", conflict_solver=prefer_primary)
 ```
 
-An implementation may be decorated with [`singleton`](#singleton): `auto_bindings`
-discovers it through the class it wraps and registers the wrapper, so the
-application-lifetime cache survives instead of being bound away.
+Each candidate is an implementation class or a [`@provides`](#provides) factory
+function (see below), so a `conflict_solver` sees both.
+
+An implementation class may be decorated with [`singleton`](#singleton):
+`auto_bindings` discovers it through the class it wraps and registers the wrapper,
+so the application-lifetime cache survives instead of being bound away. Both eager
+and lazy modes are wired this way.
 
 ```python
 from fastapi_standalone_di import RegistrableDependency, auto_bindings, singleton
@@ -395,11 +402,60 @@ class RedisCache(ICache):
 auto_bindings("myapp")  # ICache -> the singleton wrapper of RedisCache
 ```
 
-Only the default (eager) mode is wired this way. A lazy `singleton` delegates to
-`container.get(factory)`, which re-dereferences the implementation class back
-through the interface it subclasses — a cycle — so `auto_bindings` rejects a lazy
-implementation with an `AutoBindingError`. Keep an implementation-class singleton
-eager, or register a lazy singleton *factory function* by hand.
+### Factory functions with `@provides`
+
+`auto_bindings` matches implementation *classes* by their hierarchy — the
+interface is a direct base. A factory *function* has no bases, so mark it with
+[`provides`](#provides) and the interface it implements is read from its return
+annotation. This wires a dependency whose construction needs a factory (an
+`__init__` taking raw values, a value assembled from other dependencies) without
+a hand-written `register()` call.
+
+```python
+from fastapi import Depends
+
+from fastapi_standalone_di import (
+    RegistrableDependency,
+    auto_bindings,
+    provides,
+    singleton,
+)
+
+
+class ConfigStore: ...
+
+
+def get_store() -> ConfigStore:
+    return ConfigStore()
+
+
+class ConfigState(RegistrableDependency): ...
+
+
+class _FileConfigState(ConfigState):
+    def __init__(self, store: ConfigStore) -> None:
+        self.store = store
+
+
+@singleton  # optional: cache it for the application lifetime
+@provides
+def build_config(store: ConfigStore = Depends(get_store)) -> ConfigState:
+    return _FileConfigState(store)
+
+
+auto_bindings("myapp")  # ConfigState -> build_config
+```
+
+The return annotation may be the interface itself or a concrete implementation of
+it; the function is then matched exactly as an implementation class is — by the
+returned type's direct interface bases. `@provides` is **mandatory** on a factory
+function (a plain function returning an interface is left alone) and **optional**
+on a class (classes are already wired by their hierarchy). Combined with
+`@singleton`, in either order, the singleton wrapper is registered so its cache
+survives; used alone, the function is rebuilt on every resolution. A `@provides`
+whose return type carries no interface at all — `Any`, missing, or unrelated to
+`RegistrableDependency` — is reported as an `AutoBindingError`, since the marker
+promises an implementation.
 
 Sharing application state
 -------------------------
