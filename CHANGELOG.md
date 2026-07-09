@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.10.0 (2026-07-09)
+
+### Features
+
+- Wire @provides factory functions in auto_bindings
+  ([#55](https://github.com/Toilal/fastapi-standalone-di/pull/55),
+  [`4c4f5ff`](https://github.com/Toilal/fastapi-standalone-di/commit/4c4f5ff1e59b8fd86f48e10a3afa5c3197f49524))
+
+
 ## v0.9.0 (2026-07-09)
 
 ### Features
