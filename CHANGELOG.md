@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.8.0 (2026-07-09)
+
+### Features
+
+- Pre-filter modules by AST before importing in auto_bindings
+  ([#53](https://github.com/Toilal/fastapi-standalone-di/pull/53),
+  [`61f1ea1`](https://github.com/Toilal/fastapi-standalone-di/commit/61f1ea11859b0cbf78aa8fdec742c0b9539ac523))
+
+
 ## v0.7.0 (2026-07-09)
 
 ### Bug Fixes
