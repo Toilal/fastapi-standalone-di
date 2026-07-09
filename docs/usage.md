@@ -358,9 +358,61 @@ unresolved ambiguity, raises `AutoBindingError` **without registering anything**
 default, and — unlike `register_bindings` — imports every module in the scanned
 packages to inspect their classes, so call it once at bootstrap.
 
-When several implementations match one interface, pass a `conflict_solver` to
-break the tie; it is called once per conflicting interface and returns the chosen
-candidate (or `None` to leave the ambiguity as an error):
+When several implementations match one interface, mark the one to bind with
+[`@provides(primary=True)`](#provides) — it wins the tie with no extra wiring,
+whether it is a class or a factory function:
+
+```python
+from fastapi_standalone_di import RegistrableDependency, auto_bindings, provides
+
+
+class ICache(RegistrableDependency): ...
+
+
+@provides(primary=True)
+class RedisCache(ICache): ...
+
+
+class MemCache(ICache): ...  # also matches, but RedisCache is primary
+
+
+auto_bindings("myapp")  # ICache -> RedisCache
+```
+
+When several implementations match, they are ranked before any `conflict_solver`:
+
+1. a single `@provides(primary=True)` candidate wins outright (two or more
+   primaries for one interface is an `AutoBindingError`);
+2. otherwise `@provides`-marked candidates beat unmarked ones — a factory function
+   is always marked, an implementation class only when decorated — so a lone
+   marked candidate wins over any number of bare implementation classes.
+
+Only candidates left tied at the winning rank reach a `conflict_solver`. So a
+`@provides` factory automatically wins over a plain implementation class, with no
+extra wiring:
+
+```python
+from fastapi_standalone_di import RegistrableDependency, auto_bindings, provides
+
+
+class IClock(RegistrableDependency): ...
+
+
+class SystemClock(IClock): ...  # bare class, unmarked
+
+
+@provides
+def build_clock() -> IClock:  # marked, so it wins
+    return SystemClock()
+
+
+auto_bindings("myapp")  # IClock -> build_clock
+```
+
+For a tie no rank can settle — several marked candidates, or several bare classes
+— pass a `conflict_solver`; called once per still-ambiguous interface with the
+remaining contenders, it returns the chosen candidate or `None` to leave the
+ambiguity as an error:
 
 ```python
 from collections.abc import Callable
@@ -369,18 +421,17 @@ from typing import Any
 from fastapi_standalone_di import RegistrableDependency, auto_bindings
 
 
-def prefer_primary(
+def newest(
     interface: type[RegistrableDependency], impls: list[Callable[..., Any]]
 ) -> Callable[..., Any] | None:
-    primary = [impl for impl in impls if impl.__module__.startswith("myapp.primary")]
-    return primary[0] if len(primary) == 1 else None
+    return max(impls, key=lambda impl: impl.__module__)
 
 
-auto_bindings("myapp", conflict_solver=prefer_primary)
+auto_bindings("myapp", conflict_solver=newest)
 ```
 
 Each candidate is an implementation class or a [`@provides`](#provides) factory
-function (see below), so a `conflict_solver` sees both.
+function (see below), so both `primary` and a `conflict_solver` see both.
 
 An implementation class may be decorated with [`singleton`](#singleton):
 `auto_bindings` discovers it through the class it wraps and registers the wrapper,
@@ -448,14 +499,40 @@ auto_bindings("myapp")  # ConfigState -> build_config
 
 The return annotation may be the interface itself or a concrete implementation of
 it; the function is then matched exactly as an implementation class is — by the
-returned type's direct interface bases. `@provides` is **mandatory** on a factory
-function (a plain function returning an interface is left alone) and **optional**
-on a class (classes are already wired by their hierarchy). Combined with
-`@singleton`, in either order, the singleton wrapper is registered so its cache
-survives; used alone, the function is rebuilt on every resolution. A `@provides`
-whose return type carries no interface at all — `Any`, missing, or unrelated to
-`RegistrableDependency` — is reported as an `AutoBindingError`, since the marker
-promises an implementation.
+returned type's direct interface bases. It may also be a generator's element type
+— `Iterator[X]` / `AsyncIterator[X]` (or the `Generator` forms) — for a factory
+with `yield` teardown: the yielded `X` is the interface it provides. Pair it with
+`@singleton(lazy=True)` so the container owns that teardown for the application
+lifetime.
+
+```python
+from collections.abc import AsyncIterator
+
+from fastapi_standalone_di import RegistrableDependency, provides, singleton
+
+
+class RateLimiterRegistry(RegistrableDependency):
+    async def aclose(self) -> None: ...
+
+
+@singleton(lazy=True)
+@provides
+async def build_limiter() -> AsyncIterator[RateLimiterRegistry]:
+    registry = RateLimiterRegistry()
+    try:
+        yield registry
+    finally:
+        await registry.aclose()
+```
+
+`@provides` is **mandatory** on a factory function (a plain function returning an
+interface is left alone) and **optional** on a class for plain wiring (classes are
+already wired by their hierarchy) — but `@provides(primary=True)` applies to a
+class too, to win a tie (see above). Combined with `@singleton`, in either order,
+the singleton wrapper is registered so its cache survives; used alone, the
+function is rebuilt on every resolution. A `@provides` whose return type carries
+no interface at all — `Any`, missing, or unrelated to `RegistrableDependency` — is
+reported as an `AutoBindingError`, since the marker promises an implementation.
 
 Sharing application state
 -------------------------

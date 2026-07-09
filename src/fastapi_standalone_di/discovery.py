@@ -27,15 +27,43 @@ import logging
 import os
 import pkgutil
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Sequence,
+)
 from types import ModuleType
-from typing import Any, NamedTuple, cast, get_type_hints
+from typing import Any, NamedTuple, cast, get_args, get_origin, get_type_hints
 
-from fastapi_standalone_di.provides import _PROVIDES_MARKER, provides
+from fastapi_standalone_di.provides import (
+    _PROVIDES_MARKER,
+    _ProvidesConfig,
+    provides,
+)
 from fastapi_standalone_di.registration import RegistrableDependency
 from fastapi_standalone_di.singleton import _SINGLETON_IMPL_ATTR
 
 _PROVIDES_NAME = provides.__name__
+
+# The generic origins a ``@provides`` generator factory annotates its yield with.
+# ``get_origin`` normalises both the ``typing`` and ``collections.abc`` spellings
+# to these, so ``Iterator[X]`` / ``AsyncIterator[X]`` (and the ``Generator`` forms)
+# unwrap to their element type ``X`` — the interface the factory provides.
+_GENERATOR_ORIGINS = frozenset(
+    {
+        Iterator,
+        Iterable,
+        Generator,
+        AsyncIterator,
+        AsyncIterable,
+        AsyncGenerator,
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +207,11 @@ class AutoBindingError(ValueError):
     """Raised when :func:`auto_bindings` cannot wire every discovered interface.
 
     Aggregates all wiring gaps found in a single scan: interfaces with no
-    matching implementation, ambiguous interfaces (several candidates that no
-    ``conflict_solver`` resolved), and ``@provides`` functions carrying no
-    interface return type. Nothing is registered when it is raised.
+    matching implementation, ambiguous interfaces (several candidates that neither
+    a ``primary`` marker nor a ``conflict_solver`` resolved), interfaces with two
+    or more candidates marked ``@provides(primary=True)``, and ``@provides``
+    functions carrying no interface return type. Nothing is registered when it is
+    raised.
     """
 
 
@@ -239,12 +269,12 @@ def auto_bindings(
     :param recursive: also descend into nested subpackages. Defaults to ``True``
         (unlike :func:`register_bindings`): implementations are typically spread
         across a subtree.
-    :param conflict_solver: optional tie-breaker called once per interface that
-        has two or more matching implementations, with the interface class and
-        the ordered candidates (each an implementation class or a ``@provides``
-        function). It returns the chosen candidate (must be one of them), or
-        ``None`` to leave the ambiguity unresolved. Without it, an ambiguity is
-        an error.
+    :param conflict_solver: optional tie-breaker called once per interface still
+        ambiguous after the ``primary`` and marked-over-unmarked rules (see below),
+        with the interface class and the remaining contenders (each an
+        implementation class or a ``@provides`` function). It returns the chosen
+        candidate (must be one of them), or ``None`` to leave the ambiguity
+        unresolved. Without it, such an ambiguity is an error.
     :param ast: pre-filter the scanned tree by static analysis so only modules
         that *can* hold an interface or an implementation are ever imported
         (default ``True``). Without it, every module in the scanned packages is
@@ -258,12 +288,24 @@ def auto_bindings(
         metaclass, with no ``class`` statement in the source — are invisible to
         this analysis and get skipped; set ``ast=False`` for such a codebase.
 
-    An interface is bound to its single matching implementation. An interface
-    that already carries its own implementation is left untouched and reported
-    with ``already_bound=True``. Resolution and registration are two phases: if
-    any interface has zero matches, an unresolved ambiguity, or a ``@provides``
-    carries no interface return type, nothing is registered and an
-    :class:`AutoBindingError` aggregating every problem is raised.
+    An interface is bound to its single matching implementation. When several
+    match, they are ranked before any ``conflict_solver`` is consulted:
+
+    1. a candidate marked :func:`~fastapi_standalone_di.provides.provides` with
+       ``primary=True`` (a class or a factory alike) wins outright; two or more
+       primaries for one interface is an error;
+    2. otherwise ``@provides``-marked candidates take priority over unmarked ones
+       — a factory function is always marked, an implementation class only when
+       decorated — so a lone marked candidate wins over any number of unmarked
+       classes.
+
+    Only candidates left tied at the winning rank reach the ``conflict_solver``
+    (or, without one, an ambiguity error). An interface that already carries its
+    own implementation is left untouched and reported with ``already_bound=True``.
+    Resolution and registration are two phases: if any interface has zero matches,
+    an unresolved ambiguity, several primaries, or a ``@provides`` carries no
+    interface return type, nothing is registered and an :class:`AutoBindingError`
+    aggregating every problem is raised.
 
     :returns: every discovered interface that ends up with an implementation —
         both freshly bound (``already_bound=False``) and pre-existing
@@ -333,6 +375,7 @@ def auto_bindings(
     preexisting: list[Binding] = []
     unmatched: list[type] = []
     ambiguous: list[tuple[type, list[Callable[..., Any]]]] = []
+    multiple_primary: list[tuple[type, list[Callable[..., Any]]]] = []
     for interface in found:
         iface = cast("type[RegistrableDependency]", interface)
         own_impl = interface.__dict__.get("_impl")
@@ -340,27 +383,43 @@ def auto_bindings(
             preexisting.append(Binding(iface, own_impl, True))
             continue
         impls = sorted(by_interface[interface], key=_class_key)
+        if not impls:
+            unmatched.append(interface)
+            continue
         if len(impls) == 1:
             planned.append(Binding(iface, targets[impls[0]], False))
-        elif not impls:
-            unmatched.append(interface)
-        elif conflict_solver is None:
-            ambiguous.append((interface, impls))
+            continue
+        primaries = [impl for impl in impls if _is_primary(impl)]
+        if len(primaries) > 1:
+            multiple_primary.append((interface, primaries))
+            continue
+        if len(primaries) == 1:
+            planned.append(Binding(iface, targets[primaries[0]], False))
+            continue
+        marked = [impl for impl in impls if _is_marked(impl)]
+        contenders = marked or impls
+        if len(contenders) == 1:
+            planned.append(Binding(iface, targets[contenders[0]], False))
+            continue
+        if conflict_solver is None:
+            ambiguous.append((interface, contenders))
+            continue
+        chosen = conflict_solver(iface, contenders)
+        if chosen is None:
+            ambiguous.append((interface, contenders))
+        elif chosen not in contenders:
+            raise AutoBindingError(
+                f"conflict_solver returned {_qualname(chosen)}, which is not "
+                f"among the candidates for {_qualname(interface)}: "
+                f"{[_qualname(i) for i in contenders]}"
+            )
         else:
-            chosen = conflict_solver(iface, impls)
-            if chosen is None:
-                ambiguous.append((interface, impls))
-            elif chosen not in impls:
-                raise AutoBindingError(
-                    f"conflict_solver returned {_qualname(chosen)}, which is not "
-                    f"among the candidates for {_qualname(interface)}: "
-                    f"{[_qualname(i) for i in impls]}"
-                )
-            else:
-                planned.append(Binding(iface, targets[chosen], False))
+            planned.append(Binding(iface, targets[chosen], False))
 
-    if unmatched or ambiguous or provider_errors:
-        raise AutoBindingError(_format_problems(unmatched, ambiguous, provider_errors))
+    if unmatched or ambiguous or provider_errors or multiple_primary:
+        raise AutoBindingError(
+            _format_problems(unmatched, ambiguous, provider_errors, multiple_primary)
+        )
 
     for binding in planned:
         binding.interface.register(binding.implementation)
@@ -404,17 +463,34 @@ def _return_class(factory: Callable[..., Any]) -> type | None:
     """The class a factory's return annotation resolves to, or ``None``.
 
     Resolves string annotations against the factory's own module (so it works
-    under ``from __future__ import annotations``). Anything that is not a plain
-    class once resolved — a missing annotation, ``Any``, a union, an
-    unresolvable forward reference — yields ``None``: the factory carries no
-    class-shaped return type to match an interface on.
+    under ``from __future__ import annotations``), and unwraps a generator's
+    element type (``Iterator[X]`` / ``AsyncIterator[X]`` and the ``Generator``
+    forms) for a ``yield`` factory. Anything that is not a plain class once
+    resolved — a missing annotation, ``Any``, a union, an unresolvable forward
+    reference — yields ``None``: the factory carries no class-shaped return type
+    to match an interface on.
     """
     try:
         hints = get_type_hints(factory)
     except Exception:
         return None
-    returned = hints.get("return")
+    returned = _unwrap_generator(hints.get("return"))
     return returned if isinstance(returned, type) else None
+
+
+def _unwrap_generator(annotation: Any) -> Any:
+    """The yielded type of a generator/iterator annotation, else *annotation*.
+
+    A ``@provides`` factory with ``yield`` teardown annotates its return as
+    ``Iterator[X]`` / ``AsyncIterator[X]`` (or a ``Generator`` form), whose first
+    type argument is the yielded ``X`` — the interface it provides. Any other
+    annotation is returned unchanged.
+    """
+    if get_origin(annotation) in _GENERATOR_ORIGINS:
+        args = get_args(annotation)
+        if args:
+            return args[0]
+    return annotation
 
 
 def _provides_role(member: object) -> tuple[str, Any] | None:
@@ -458,6 +534,40 @@ def _provides_role(member: object) -> tuple[str, Any] | None:
             "interface or an implementation of one",
         )
     return ("impl", returned)
+
+
+def _provides_config(candidate: Callable[..., Any]) -> _ProvidesConfig | None:
+    """The ``@provides`` marker carried by *candidate*, or ``None``.
+
+    Read from a class's own ``__dict__`` — never an inherited marker, so a subclass
+    does not inherit a parent's ``@provides`` — and directly from a function or
+    ``@singleton`` wrapper (``functools.wraps`` copies the marker onto it).
+    """
+    if isinstance(candidate, type):
+        marker = candidate.__dict__.get(_PROVIDES_MARKER)
+    else:
+        marker = getattr(candidate, _PROVIDES_MARKER, None)
+    return cast("_ProvidesConfig | None", marker)
+
+
+def _is_marked(candidate: Callable[..., Any]) -> bool:
+    """Whether *candidate* carries a ``@provides`` marker at all.
+
+    A factory function is always marked (that is how it becomes a candidate); an
+    implementation class is marked only when explicitly decorated. Marked
+    candidates take priority over unmarked ones when several match an interface.
+    """
+    return _provides_config(candidate) is not None
+
+
+def _is_primary(candidate: Callable[..., Any]) -> bool:
+    """Whether *candidate* is marked ``@provides(primary=True)``.
+
+    Elects one implementation when several match an interface, ahead of the
+    marked-over-unmarked priority (see :func:`_is_marked`).
+    """
+    config = _provides_config(candidate)
+    return config is not None and config.primary
 
 
 def _provides_interfaces(
@@ -773,6 +883,7 @@ def _format_problems(
     unmatched: list[type],
     ambiguous: list[tuple[type, list[Callable[..., Any]]]],
     provider_errors: list[tuple[Callable[..., Any], str]],
+    multiple_primary: list[tuple[type, list[Callable[..., Any]]]],
 ) -> str:
     lines = ["auto_bindings could not wire every interface:"]
     for interface in sorted(unmatched, key=_class_key):
@@ -781,6 +892,14 @@ def _format_problems(
         names = ", ".join(_qualname(impl) for impl in impls)
         lines.append(
             f"  - {_qualname(interface)}: several matching implementations ({names})"
+        )
+    for interface, impls in sorted(
+        multiple_primary, key=lambda pair: _class_key(pair[0])
+    ):
+        names = ", ".join(_qualname(impl) for impl in impls)
+        lines.append(
+            f"  - {_qualname(interface)}: several implementations marked "
+            f"@provides(primary=True) ({names})"
         )
     for provider, reason in sorted(
         provider_errors, key=lambda entry: _class_key(entry[0])

@@ -78,17 +78,46 @@ def _provides_factory(
     *,
     singleton: bool = False,
     lazy: bool = False,
+    primary: bool = False,
+    gen: str | None = None,
 ) -> str:
     """A ``@provides`` factory *function* returning ``returns`` — an interface or a
-    concrete implementation of one — optionally also a ``@singleton``."""
+    concrete implementation of one — optionally also a ``@singleton``.
+
+    ``primary`` marks it ``@provides(primary=True)``. ``gen`` makes it a generator
+    with ``yield`` teardown whose element type is ``returns``: ``"sync"`` annotates
+    ``Iterator[...]``, ``"async"`` ``AsyncIterator[...]``."""
     imports = ["from fastapi_standalone_di import provides"]
-    decorators = ["@provides"]
+    decorators = ["@provides(primary=True)" if primary else "@provides"]
     if singleton:
         imports.append("from fastapi_standalone_di import singleton")
         decorators.insert(0, "@singleton(lazy=True)" if lazy else "@singleton")
     imports.append(f"from {_ROOT}.{returns_module} import {returns}")
-    body = "\n".join(imports) + "\n\n\n" + "\n".join(decorators) + "\n"
-    return f"{body}def {name}() -> {returns}:\n    return {returns}()\n"
+
+    if gen is None:
+        annotation, statement, prefix = returns, f"return {returns}()", "def"
+    else:
+        wrapper = "AsyncIterator" if gen == "async" else "Iterator"
+        imports.insert(0, f"from collections.abc import {wrapper}")
+        annotation = f"{wrapper}[{returns}]"
+        statement = f"yield {returns}()"
+        prefix = "async def" if gen == "async" else "def"
+
+    head = "\n".join(imports) + "\n\n\n" + "\n".join(decorators) + "\n"
+    return f"{head}{prefix} {name}() -> {annotation}:\n    {statement}\n"
+
+
+def _provides_class(
+    name: str, base: str, base_module: str, *, primary: bool = False
+) -> str:
+    """An implementation *class* decorated with ``@provides`` (optionally primary)."""
+    decorator = "@provides(primary=True)" if primary else "@provides"
+    return (
+        "from fastapi_standalone_di import provides\n"
+        f"from {_ROOT}.{base_module} import {base}\n\n\n"
+        f"{decorator}\n"
+        f"class {name}({base}): ...\n"
+    )
 
 
 def _trap(message: str = "module must not be imported") -> str:
@@ -728,11 +757,11 @@ class TestAutoBindings:
         assert icache.impl.__name__ == "RedisCache"
         assert not isinstance(icache.impl, type)  # the singleton wrapper
 
-    def test_factory_and_class_for_same_interface_is_ambiguous(
+    def test_provides_factory_wins_over_unmarked_class(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
-        # A @provides factory and a bare class both implementing the same
-        # interface is a genuine ambiguity, resolved via conflict_solver.
+        # A @provides candidate is marked; a bare class is not. Marked beats
+        # unmarked, so the factory wins the tie with no conflict_solver.
         root = make_package(
             {
                 "contracts/cache.py": _iface("ICache"),
@@ -742,23 +771,277 @@ class TestAutoBindings:
                 ),
             }
         )
-        with pytest.raises(AutoBindingError, match="several matching implementations"):
-            auto_bindings(root)
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
 
-        candidates: list[Callable[..., object]] = []
+    def test_provides_class_wins_over_unmarked_class(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # Marked-over-unmarked applies to a class too: a @provides class beats a
+        # bare implementation class, no primary or conflict_solver needed.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _provides_class(
+                    "RedisCache", "ICache", "contracts.cache"
+                ),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+            }
+        )
+        auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert icache.impl.__name__ == "RedisCache"
+
+    def test_conflict_solver_only_sees_marked_when_marked_present(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # With several marked candidates and some unmarked ones, only the marked
+        # contenders remain tied — the unmarked classes are already deprioritised,
+        # so the conflict_solver never sees them.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _provides_factory(
+                    "build_redis", "ICache", "contracts.cache"
+                ),
+                "infra/mem.py": _provides_factory(
+                    "build_mem", "ICache", "contracts.cache"
+                ),
+                "infra/plain.py": _impl("PlainCache", "ICache", "contracts.cache"),
+            }
+        )
+        seen: list[Callable[..., object]] = []
 
         def solver(
             interface: type[RegistrableDependency],
             impls: list[Callable[..., object]],
         ) -> Callable[..., object] | None:
-            candidates.extend(impls)
-            return next(i for i in impls if i.__name__ == "build_cache")
+            seen.extend(impls)
+            return next(i for i in impls if i.__name__ == "build_redis")
 
         result = auto_bindings(root, conflict_solver=solver)
         icache = _cls(root, "contracts.cache", "ICache")
-        assert {i.__name__ for i in candidates} == {"MemCache", "build_cache"}
+        assert {i.__name__ for i in seen} == {"build_redis", "build_mem"}
         assert result == [Binding(icache, icache.impl, False)]
-        assert icache.impl.__name__ == "build_cache"
+        assert icache.impl.__name__ == "build_redis"
+
+    @pytest.mark.parametrize("gen", ["async", "sync"])
+    def test_binds_provides_generator_factory_by_element(
+        self, make_package: Callable[[dict[str, str]], str], gen: str
+    ) -> None:
+        # A @provides generator factory with yield teardown annotates its return
+        # as AsyncIterator[Interface] / Iterator[Interface]; the yielded element
+        # is the interface it provides, so the layer is unwrapped to match it.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache", gen=gen
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
+
+    def test_binds_provides_generator_returning_implementation(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The unwrapped element may be a concrete implementation of the interface,
+        # matched by its direct interface bases exactly like a class. The returned
+        # class is abstract, so it is not itself a bare candidate.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    "import abc\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "class RedisCache(ICache, abc.ABC):\n"
+                    "    @abc.abstractmethod\n"
+                    "    def ping(self) -> None: ...\n"
+                ),
+                "infra/factory.py": (
+                    "from collections.abc import AsyncIterator\n"
+                    "from fastapi_standalone_di import provides\n"
+                    f"from {_ROOT}.infra.redis import RedisCache\n\n\n"
+                    "@provides\n"
+                    "async def build_cache() -> AsyncIterator[RedisCache]:\n"
+                    "    raise NotImplementedError\n"
+                    "    yield\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
+
+    def test_primary_provides_factory_wins_over_class(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # @provides(primary=True) settles the factory-vs-class ambiguity with no
+        # conflict_solver: the primary candidate is bound.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache", primary=True
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        build_cache = _cls(root, "infra.factory", "build_cache")
+        assert result == [Binding(icache, build_cache, False)]
+
+    def test_primary_class_wins_over_factory(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # primary= applies to a class too, not only a factory function.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/mem.py": _provides_class(
+                    "MemCache", "ICache", "contracts.cache", primary=True
+                ),
+                "infra/factory.py": _provides_factory(
+                    "build_cache", "ICache", "contracts.cache"
+                ),
+            }
+        )
+        auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert icache.impl.__name__ == "MemCache"
+
+    def test_primary_class_wins_over_plain_class(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # Two competing implementation classes, one marked primary: it wins with
+        # no conflict_solver.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _provides_class(
+                    "RedisCache", "ICache", "contracts.cache", primary=True
+                ),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert icache.impl.__name__ == "RedisCache"
+        assert [b.interface for b in result] == [icache]
+
+    def test_primary_takes_precedence_over_conflict_solver(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A single primary is honoured before the conflict_solver is consulted, so
+        # the solver never runs for that interface.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _provides_class(
+                    "RedisCache", "ICache", "contracts.cache", primary=True
+                ),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+            }
+        )
+        calls: list[type] = []
+
+        def solver(
+            interface: type[RegistrableDependency], impls: list[type]
+        ) -> type | None:
+            calls.append(interface)
+            return next(i for i in impls if i.__name__ == "MemCache")
+
+        result = auto_bindings(root, conflict_solver=solver)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert calls == []
+        assert icache.impl.__name__ == "RedisCache"
+        assert [b.interface for b in result] == [icache]
+
+    def test_several_primaries_for_one_interface_is_error(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # Two candidates both marked primary cannot elect a winner — a reported
+        # misconfiguration, distinct from a plain ambiguity.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _provides_class(
+                    "RedisCache", "ICache", "contracts.cache", primary=True
+                ),
+                "infra/mem.py": _provides_class(
+                    "MemCache", "ICache", "contracts.cache", primary=True
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError, match="primary=True") as excinfo:
+            auto_bindings(root)
+        message = str(excinfo.value)
+        assert "RedisCache" in message
+        assert "MemCache" in message
+
+    def test_primary_on_singleton_generator_factory_wins(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The real teardown case: two @singleton(lazy=True) @provides generator
+        # factories for one interface, one primary. The marker is read through the
+        # singleton wrapper, so the primary factory wins and its wrapper is bound.
+        root = make_package(
+            {
+                "contracts/store.py": _iface("SeenStore"),
+                "infra/redis.py": _provides_factory(
+                    "build_redis_store",
+                    "SeenStore",
+                    "contracts.store",
+                    singleton=True,
+                    lazy=True,
+                    primary=True,
+                    gen="async",
+                ),
+                "infra/memory.py": _provides_factory(
+                    "build_memory_store",
+                    "SeenStore",
+                    "contracts.store",
+                    singleton=True,
+                    lazy=True,
+                    gen="async",
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        store = _cls(root, "contracts.store", "SeenStore")
+        build_redis_store = _cls(root, "infra.redis", "build_redis_store")
+        assert result == [Binding(store, build_redis_store, False)]
+
+    def test_primary_marker_is_not_inherited(self) -> None:
+        # primary is read from a class's own __dict__, so a subclass does not
+        # inherit its parent's primary flag.
+        from fastapi_standalone_di import provides
+        from fastapi_standalone_di.discovery import _is_primary
+
+        @provides(primary=True)
+        class Base: ...
+
+        class Sub(Base): ...
+
+        assert _is_primary(Base) is True
+        assert _is_primary(Sub) is False
+
+    def test_bare_provides_is_not_primary(self) -> None:
+        # A bare @provides carries primary=False, so it does not silently win a tie.
+        from fastapi_standalone_di import provides
+        from fastapi_standalone_di.discovery import _is_primary
+
+        @provides
+        def build() -> None: ...
+
+        assert _is_primary(build) is False
 
 
 class TestAstPrefilter:
