@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.11.1 (2026-07-09)
+
+### Bug Fixes
+
+- Resolve only the return annotation in _return_class
+  ([#59](https://github.com/Toilal/fastapi-standalone-di/pull/59),
+  [`50847c9`](https://github.com/Toilal/fastapi-standalone-di/commit/50847c98bbc66e618567000195a1ffc2b4f576b5))
+
+- Resolve only the return annotation in _return_class (#58)
+  ([#59](https://github.com/Toilal/fastapi-standalone-di/pull/59),
+  [`50847c9`](https://github.com/Toilal/fastapi-standalone-di/commit/50847c98bbc66e618567000195a1ffc2b4f576b5))
+
+
 ## v0.11.0 (2026-07-09)
 
 ### Features
