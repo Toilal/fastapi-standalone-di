@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.9.0 (2026-07-09)
+
+### Features
+
+- Wire lazy @singleton implementations in auto_bindings
+  ([#54](https://github.com/Toilal/fastapi-standalone-di/pull/54),
+  [`1903d90`](https://github.com/Toilal/fastapi-standalone-di/commit/1903d902abf3d61ecedece89792515b669c4705d))
+
+
 ## v0.8.0 (2026-07-09)
 
 ### Features
