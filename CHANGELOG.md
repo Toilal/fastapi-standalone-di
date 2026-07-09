@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.7.0 (2026-07-09)
+
+### Bug Fixes
+
+- Detect cyclic dependency resolution instead of deadlocking
+  ([#50](https://github.com/Toilal/fastapi-standalone-di/pull/50),
+  [`90d3e06`](https://github.com/Toilal/fastapi-standalone-di/commit/90d3e0688a4bd40326ca95267a7fb2848524d2c5))
+
+### Features
+
+- Discover @singleton implementations in auto_bindings
+  ([#48](https://github.com/Toilal/fastapi-standalone-di/pull/48),
+  [`9468319`](https://github.com/Toilal/fastapi-standalone-di/commit/94683195f7b3f3bdbe53f4f94615e27b8fac5874))
+
+
 ## v0.6.0 (2026-07-08)
 
 ### Features
