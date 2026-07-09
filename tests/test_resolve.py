@@ -9,11 +9,14 @@ from fastapi import BackgroundTasks, Depends, Response
 from fastapi.dependencies.utils import get_dependant
 
 from fastapi_standalone_di import (
+    AppState,
+    CyclicDependencyError,
     DependantCache,
     DependencyScope,
     FastAPIContainer,
     RegistrableDependency,
     ResolvedDependencies,
+    singleton,
 )
 
 # ---------------------------------------------------------------------------
@@ -851,3 +854,45 @@ class TestInvokeResolvedLifetime:
         session = deps.get(_session_factory, transitive=True)
         assert isinstance(session, Session)
         assert session in _session_teardowns
+
+
+class ICyclic(RegistrableDependency):
+    pass
+
+
+class TestCyclicDependency:
+    """A dependency that re-enters its own in-flight build is a cycle, surfaced
+    as CyclicDependencyError rather than a lock deadlock. wait_for guards the
+    suite: a regression fails fast instead of hanging forever."""
+
+    @pytest.fixture(autouse=True)
+    def _reset(self) -> Iterator[None]:
+        AppState.reset_standalone()
+        ICyclic.register(None)
+        yield
+        ICyclic.register(None)
+        AppState.reset_standalone()
+
+    async def test_lazy_singleton_on_implementation_class_raises(self) -> None:
+        # The #49 scenario: a lazy singleton whose factory is the implementation
+        # class registered for its own interface. container.get(factory)
+        # dereferences back to the singleton wrapper.
+        class RedisCache(ICyclic):
+            def __init__(self) -> None: ...
+
+        ICyclic.register(singleton(RedisCache, lazy=True))
+        c = FastAPIContainer()
+        with pytest.raises(CyclicDependencyError):
+            await asyncio.wait_for(c.get(ICyclic.dependency()), timeout=5)
+
+    async def test_eager_singleton_on_implementation_class_is_fine(self) -> None:
+        # The eager counterpart builds the class directly — no re-entry.
+        class RedisCache(ICyclic):
+            def __init__(self) -> None: ...
+
+        ICyclic.register(singleton(RedisCache))
+        c = FastAPIContainer()
+        first = await asyncio.wait_for(c.get(ICyclic.dependency()), timeout=5)
+        second = await c.get(ICyclic.dependency())
+        assert first is second
+        assert type(first).__name__ == "RedisCache"

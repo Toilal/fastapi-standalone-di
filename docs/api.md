@@ -12,6 +12,7 @@ from fastapi_standalone_di import (
     AutoBindingError,
     Binding,
     ConflictSolver,
+    CyclicDependencyError,
     DependantCache,
     DependencyOverrides,
     DependencyScope,
@@ -147,6 +148,16 @@ Dependency scopes
 `RuntimeError` subclass raised on scope misuse: resolving a `SCOPED` dependency
 without an active scope, or a `CONTAINER`-scoped dependency depending on a
 `SCOPED` one (a captive dependency).
+
+### CyclicDependencyError
+
+`RuntimeError` subclass raised when a dependency re-enters its own in-flight
+build — a cycle. Without detection the resolver, which serialises concurrent
+builds of a shared dependency on a per-callable lock, would wait on that lock
+forever. A common cause is a lazy [`singleton`](#singleton) whose factory is the
+implementation class registered for the very interface it subclasses: resolving
+it dereferences back to the singleton. Make such a singleton eager, or register a
+lazy singleton **factory function** instead of the class.
 
 Application state
 -----------------
