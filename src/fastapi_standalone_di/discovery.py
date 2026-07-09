@@ -38,7 +38,7 @@ from collections.abc import (
     Sequence,
 )
 from types import ModuleType
-from typing import Any, NamedTuple, cast, get_args, get_origin, get_type_hints
+from typing import Any, NamedTuple, cast, get_args, get_origin
 
 from fastapi_standalone_di.provides import (
     _PROVIDES_MARKER,
@@ -469,12 +469,22 @@ def _return_class(factory: Callable[..., Any]) -> type | None:
     resolved — a missing annotation, ``Any``, a union, an unresolvable forward
     reference — yields ``None``: the factory carries no class-shaped return type
     to match an interface on.
+
+    Only the return annotation is evaluated, never the parameters': a parameter
+    annotated ``Annotated[Port, Depends(Port)]`` would construct its ``Depends``
+    metadata when resolved, and under ``patch_for_registrable_dependency_support``
+    that eagerly resolves the port — which is unbound mid-sweep and would make the
+    whole factory look unresolvable.
     """
-    try:
-        hints = get_type_hints(factory)
-    except Exception:
+    annotation = getattr(factory, "__annotations__", {}).get("return")
+    if annotation is None:
         return None
-    returned = _unwrap_generator(hints.get("return"))
+    if isinstance(annotation, str):
+        try:
+            annotation = eval(annotation, getattr(factory, "__globals__", {}), None)
+        except Exception:
+            return None
+    returned = _unwrap_generator(annotation)
     return returned if isinstance(returned, type) else None
 
 

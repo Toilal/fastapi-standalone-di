@@ -5,6 +5,7 @@ import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import fastapi.params
 import pytest
 
 from fastapi_standalone_di import (
@@ -14,9 +15,25 @@ from fastapi_standalone_di import (
     FastAPIContainer,
     RegistrableDependency,
     auto_bindings,
+    patch_for_registrable_dependency_support,
 )
+from fastapi_standalone_di.registration import _PATCHED_FLAG
 
 _ROOT = "_ab_pkg"
+
+
+@pytest.fixture
+def _unpatch_depends() -> Iterator[None]:
+    """Undo the in-place ``Depends`` patch so the sweep starts from a clean class."""
+    depends = fastapi.params.Depends
+    had_property = "dependency" in depends.__dict__
+    try:
+        yield
+    finally:
+        if not had_property and "dependency" in depends.__dict__:
+            del depends.dependency
+        if hasattr(depends, _PATCHED_FLAG):
+            delattr(depends, _PATCHED_FLAG)
 
 
 @pytest.fixture
@@ -647,6 +664,38 @@ class TestAutoBindings:
         icache = _cls(root, "contracts.cache", "ICache")
         build_cache = _cls(root, "infra.factory", "build_cache")
         assert result == [Binding(icache, build_cache, False)]
+
+    @pytest.mark.usefixtures("_unpatch_depends")
+    def test_binds_provides_factory_with_depends_param_under_patch(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A @provides factory whose parameter is ``Annotated[Port, Depends(Port)]``
+        # must still be classified by its *return* type alone. Resolving the whole
+        # signature would build the parameter's ``Depends(Port)`` metadata, and
+        # under the patch that eagerly dereferences ``Port`` — unbound mid-sweep —
+        # which used to make the factory look as if it had no resolvable return
+        # type. Order no longer matters: the patch is active before the sweep here.
+        root = make_package(
+            {
+                "contracts/store.py": _iface("IStore"),
+                "infra/factory.py": (
+                    "from __future__ import annotations\n"
+                    "from typing import Annotated\n"
+                    "from fastapi import Depends\n"
+                    "from fastapi_standalone_di import provides\n"
+                    f"from {_ROOT}.contracts.store import IStore\n\n\n"
+                    "@provides(primary=True)\n"
+                    "def build_store(dep: Annotated[IStore, Depends(IStore)]) "
+                    "-> IStore:\n"
+                    "    return IStore()\n"
+                ),
+            }
+        )
+        patch_for_registrable_dependency_support()
+        result = auto_bindings(root)
+        istore = _cls(root, "contracts.store", "IStore")
+        build_store = _cls(root, "infra.factory", "build_store")
+        assert result == [Binding(istore, build_store, False)]
 
     def test_provides_without_return_type_is_reported(
         self, make_package: Callable[[dict[str, str]], str]
