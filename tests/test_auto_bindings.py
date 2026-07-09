@@ -434,13 +434,13 @@ class TestAutoBindings:
         assert first is second
         assert type(first).__name__ == "RedisCache"
 
-    def test_lazy_singleton_decorated_implementation_is_rejected(
+    async def test_binds_lazy_singleton_decorated_implementation(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
-        # A lazy @singleton delegates to container.get(factory), which
-        # re-dereferences the implementation class back through the interface it
-        # subclasses — a cycle. auto_bindings must reject it, not register a
-        # binding that deadlocks at resolution, and register nothing.
+        # A lazy @singleton implementation resolves via the container, which owns
+        # its teardown. auto_bindings wires it like any other: at resolution the
+        # interface dereferences to the lazy wrapper, and the wrapper builds the
+        # concrete class directly (no re-entry through the interface).
         root = make_package(
             {
                 "contracts/cache.py": _iface("ICache"),
@@ -449,17 +449,27 @@ class TestAutoBindings:
                 ),
             }
         )
+        result = auto_bindings(root)
         icache = _cls(root, "contracts.cache", "ICache")
-        with pytest.raises(AutoBindingError, match="lazy @singleton"):
-            auto_bindings(root)
-        assert icache._impl is None
+        assert result == [Binding(icache, icache.impl, False)]
+        assert not isinstance(icache.impl, type)
+        assert icache.impl.__name__ == "RedisCache"
 
-    def test_unmatched_lazy_singleton_is_ignored_not_rejected(
+        AppState.reset_standalone()
+        try:
+            async with FastAPIContainer() as container:
+                first = await container.get(icache)
+                second = await container.get(icache)
+        finally:
+            AppState.reset_standalone()
+        assert first is second
+        assert type(first).__name__ == "RedisCache"
+
+    def test_unmatched_lazy_singleton_is_ignored(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
-        # A lazy singleton that is not the implementation of any wired interface is
-        # ignored like any other unmatched candidate — only a *selected* lazy
-        # implementation is rejected.
+        # A lazy singleton that is not the implementation of any wired interface
+        # is ignored like any other unmatched candidate.
         root = make_package(
             {
                 "contracts/cache.py": _iface("ICache"),

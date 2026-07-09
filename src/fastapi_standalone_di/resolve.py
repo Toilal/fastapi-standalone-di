@@ -536,6 +536,22 @@ class FastAPIContainer:
         deps = await self.resolve(dependency)
         return deps.get(dependency)
 
+    async def _resolve_direct(self, dependency: Callable[..., Any]) -> Any:
+        """Resolve *dependency* as itself, without ``RegistrableDependency`` deref.
+
+        A lazy ``@singleton`` wrapping an implementation class registered for the
+        interface it subclasses must build *that class*. Going through
+        :meth:`get` would dereference the class back through the interface to the
+        very wrapper now resolving it, re-entering its own build (a cycle). This
+        resolves the class directly; its sub-dependencies are dereferenced as
+        usual. For a factory that is not a ``RegistrableDependency`` (a plain
+        function, a non-interface class) it is identical to :meth:`get`.
+        """
+        deps = await self._resolve_many(
+            (dependency,), active_scope=None, dereference=False
+        )
+        return deps.all_instances()[dependency]
+
     @overload
     async def optional(self, dependency: type[T]) -> T | None: ...
 
@@ -726,12 +742,13 @@ class FastAPIContainer:
         dependencies: tuple[Callable[..., Any], ...],
         *,
         active_scope: "ResolutionScope | None",
+        dereference: bool = True,
     ) -> ResolvedDependencies:
         instances: dict[Callable[..., Any], Any] = {}
         collected: dict[Callable[..., Any], Any] = {}
         request = _LazyRequest(self._build_request)
         for dep in dependencies:
-            resolved = _resolve_callable(dep)
+            resolved = _resolve_callable(dep) if dereference else dep
             dep_scope = self._scope_of(dep, resolved, None)
             instances[resolved] = await self._resolve_single(
                 resolved,
@@ -833,10 +850,7 @@ class FastAPIContainer:
                 raise CyclicDependencyError(
                     f"{name} depends on itself, directly or through a "
                     "RegistrableDependency indirection. Resolving it re-enters its "
-                    "own in-flight build. A lazy singleton whose factory is the "
-                    "implementation registered for the interface it subclasses is "
-                    "one cause; make that singleton eager, or register a lazy "
-                    "singleton factory function instead of the class."
+                    "own in-flight build."
                 )
             # Serialise concurrent resolutions of the same shared dependency:
             # without this, two ``get``/``invoke`` racing on a cache miss would
