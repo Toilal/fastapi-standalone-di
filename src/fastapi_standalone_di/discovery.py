@@ -19,10 +19,12 @@ a feature package directly also imports its *own* binding module, so an entry
 point can wire an explicit subset of features rather than a whole subtree.
 """
 
+import ast
 import importlib
 import importlib.util
 import inspect
 import logging
+import os
 import pkgutil
 import sys
 from collections.abc import Callable, Iterator, Sequence
@@ -204,6 +206,7 @@ def auto_bindings(
     implementations: Sequence[str | ModuleType] = (),
     recursive: bool = True,
     conflict_solver: ConflictSolver | None = None,
+    ast: bool = True,
 ) -> list[Binding]:
     """Wire ``RegistrableDependency`` interfaces to their implementations by convention.
 
@@ -227,6 +230,18 @@ def auto_bindings(
         the ordered candidate classes. It returns the chosen candidate (must be
         one of them), or ``None`` to leave the ambiguity unresolved. Without it,
         an ambiguity is an error.
+    :param ast: pre-filter the scanned tree by static analysis so only modules
+        that *can* hold an interface or an implementation are ever imported
+        (default ``True``). Without it, every module in the scanned packages is
+        imported to be inspected — running their import-time side effects (e.g.
+        mounting routers). A module is kept only if its source declares a class
+        based on ``RegistrableDependency`` (an interface) or on one of the
+        discovered interfaces (an implementation); anything the analysis cannot
+        resolve statically (unreadable source, a syntax error, a dynamically
+        computed base class) is imported to stay safe. Interfaces or
+        implementations synthesised at import time — via ``type(...)`` or a
+        metaclass, with no ``class`` statement in the source — are invisible to
+        this analysis and get skipped; set ``ast=False`` for such a codebase.
 
     An interface is bound to its single matching implementation. An interface
     that already carries its own implementation is left untouched and reported
@@ -256,7 +271,15 @@ def auto_bindings(
     found: list[type] = []
     candidates: list[type] = []
     targets: dict[type, Callable[..., Any]] = {}
-    for member in _scan_members(interface_roots + implementation_roots, recursive):
+    members = _scan_members(
+        interface_roots,
+        implementation_roots,
+        recursive=recursive,
+        ast_prefilter=ast,
+        interface_names=interface_names,
+        implementation_names=implementation_names,
+    )
+    for member in members:
         if isinstance(member, type) and RegistrableDependency in member.__bases__:
             if _under_any(member.__module__, interface_names):
                 found.append(member)
@@ -367,15 +390,244 @@ def _impl_class(member: object) -> type | None:
     return wrapped if isinstance(wrapped, type) else None
 
 
-def _scan_members(roots: list[ModuleType], recursive: bool) -> list[Any]:
-    visited: set[str] = set()
+def _scan_members(
+    interface_roots: list[ModuleType],
+    implementation_roots: list[ModuleType],
+    *,
+    recursive: bool,
+    ast_prefilter: bool,
+    interface_names: set[str],
+    implementation_names: set[str],
+) -> list[Any]:
+    modules = _select_modules(
+        interface_roots,
+        implementation_roots,
+        recursive=recursive,
+        ast_prefilter=ast_prefilter,
+        interface_names=interface_names,
+        implementation_names=implementation_names,
+    )
     members: dict[str, Any] = {}
-    for root in roots:
-        for module in _walk_modules(root, recursive=recursive, visited=visited):
-            for obj in vars(module).values():
-                if _impl_class(obj) is not None and obj.__module__ == module.__name__:
-                    members[f"{obj.__module__}.{obj.__qualname__}"] = obj
+    for module in modules:
+        for obj in vars(module).values():
+            if _impl_class(obj) is not None and obj.__module__ == module.__name__:
+                members[f"{obj.__module__}.{obj.__qualname__}"] = obj
     return list(members.values())
+
+
+def _select_modules(
+    interface_roots: list[ModuleType],
+    implementation_roots: list[ModuleType],
+    *,
+    recursive: bool,
+    ast_prefilter: bool,
+    interface_names: set[str],
+    implementation_names: set[str],
+) -> list[ModuleType]:
+    """The modules to inspect for members, importing each exactly once.
+
+    Without ``ast_prefilter`` every module in the scanned tree is imported (the
+    exhaustive walk). With it, only modules a static analysis cannot rule out as
+    holding an interface or an implementation are imported (see
+    :func:`_select_modules_ast`).
+    """
+    roots: dict[str, ModuleType] = {}
+    for root in (*interface_roots, *implementation_roots):
+        roots.setdefault(root.__name__, root)
+
+    if not ast_prefilter:
+        visited: set[str] = set()
+        modules: list[ModuleType] = []
+        for root in roots.values():
+            modules.extend(_walk_modules(root, recursive=recursive, visited=visited))
+        return modules
+
+    return _select_modules_ast(
+        list(roots.values()),
+        recursive=recursive,
+        interface_names=interface_names,
+        implementation_names=implementation_names,
+    )
+
+
+def _select_modules_ast(
+    roots: list[ModuleType],
+    *,
+    recursive: bool,
+    interface_names: set[str],
+    implementation_names: set[str],
+) -> list[ModuleType]:
+    """Import only the descendant modules that may declare an interface or impl.
+
+    The scanned roots are always imported and inspected (they were passed
+    explicitly). Their descendants are enumerated straight from the filesystem —
+    never imported to enumerate them — and each is parsed:
+
+    - Pass 1 keeps every module whose source declares a class based on
+      ``RegistrableDependency``: only these can define an interface. Importing
+      them yields the concrete interface classes.
+    - Pass 2 keeps every remaining module whose source declares a class based on
+      one of those interfaces: only these can define a matching implementation.
+
+    A module whose source cannot be read or parsed, or that carries a base class
+    the analysis cannot resolve statically, is imported unconditionally — the
+    filter only ever skips a module it can prove holds nothing relevant.
+    """
+    inventory: dict[str, bytes | None] = {}
+    for root in roots:
+        path = getattr(root, "__path__", None)
+        if path is None:
+            continue
+        for name, source in _iter_descendant_sources(
+            list(path), f"{root.__name__}.", recursive
+        ):
+            inventory.setdefault(name, source)
+
+    analyses = {name: _analyze_module(source) for name, source in inventory.items()}
+    imported: dict[str, ModuleType] = {}
+
+    for name in inventory:
+        if not _under_any(name, interface_names):
+            continue
+        analysis = analyses[name]
+        if (
+            analysis is None
+            or analysis.defines_marker_subclass
+            or analysis.has_unresolved_base
+        ):
+            imported.setdefault(name, importlib.import_module(name))
+
+    interface_class_names: set[str] = set()
+    for module in (*roots, *imported.values()):
+        for obj in vars(module).values():
+            if (
+                isinstance(obj, type)
+                and RegistrableDependency in obj.__bases__
+                and obj.__module__ == module.__name__
+            ):
+                interface_class_names.add(obj.__name__)
+
+    for name in inventory:
+        if name in imported or not _under_any(name, implementation_names):
+            continue
+        analysis = analyses[name]
+        if (
+            analysis is None
+            or analysis.has_unresolved_base
+            or analysis.base_names & interface_class_names
+        ):
+            imported.setdefault(name, importlib.import_module(name))
+
+    return [*roots, *imported.values()]
+
+
+def _iter_descendant_sources(
+    search_paths: list[str], prefix: str, recursive: bool
+) -> Iterator[tuple[str, bytes | None]]:
+    """Yield ``(module_name, source_bytes | None)`` for every descendant module.
+
+    Walks the package tree from the filesystem alone, importing nothing. Source
+    is ``None`` when it cannot be located as a plain ``.py`` file (a namespace
+    package's missing ``__init__``, a compiled-only or zipped module, an exotic
+    finder) — the caller then imports that module rather than risk skipping it.
+    """
+    for info in pkgutil.iter_modules(search_paths, prefix=prefix):
+        leaf = info.name.rpartition(".")[2]
+        base = getattr(info.module_finder, "path", None)
+        if info.ispkg:
+            package_dir = os.path.join(base, leaf) if base is not None else None
+            init = (
+                os.path.join(package_dir, "__init__.py")
+                if package_dir is not None
+                else None
+            )
+            yield info.name, _read_source(init)
+            if recursive and package_dir is not None:
+                yield from _iter_descendant_sources(
+                    [package_dir], f"{info.name}.", recursive
+                )
+        else:
+            source_file = os.path.join(base, f"{leaf}.py") if base is not None else None
+            yield info.name, _read_source(source_file)
+
+
+def _read_source(path: str | None) -> bytes | None:
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+class _ModuleAnalysis(NamedTuple):
+    """What a module's source statically reveals about the classes it declares.
+
+    ``base_names`` holds, per class base, the *original* imported simple name
+    (an ``as`` alias is resolved back), so it can be matched against the
+    discovered interface class names regardless of how the module aliased them.
+    """
+
+    defines_marker_subclass: bool
+    base_names: frozenset[str]
+    has_unresolved_base: bool
+
+
+def _analyze_module(source: bytes | None) -> _ModuleAnalysis | None:
+    if source is None:
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    aliases: dict[str, str] = {}
+    star_import = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    star_import = True
+                else:
+                    aliases[alias.asname or alias.name] = alias.name
+
+    base_names: set[str] = set()
+    defines_marker = False
+    unresolved = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for base in node.bases:
+            simple = _base_simple_name(base)
+            if simple is None:
+                unresolved = True
+                continue
+            original = aliases.get(simple, simple)
+            base_names.add(original)
+            if original == RegistrableDependency.__name__:
+                defines_marker = True
+            elif star_import and simple not in aliases:
+                unresolved = True
+
+    return _ModuleAnalysis(defines_marker, frozenset(base_names), unresolved)
+
+
+def _base_simple_name(node: ast.expr) -> str | None:
+    """The bare class name a base-class expression ultimately references.
+
+    Resolves ``Name`` and dotted ``Attribute`` accesses, and unwraps a
+    subscripted generic (``Interface[T]`` → ``Interface``). Anything else — a
+    call, an unpack, a computed expression — returns ``None``: the base cannot
+    be matched statically, so the module is imported to be safe.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _base_simple_name(node.value)
+    return None
 
 
 def _walk_modules(

@@ -71,6 +71,11 @@ def _singleton_impl(
     )
 
 
+def _trap(message: str = "module must not be imported") -> str:
+    """A module that raises on import — proof it was (not) imported."""
+    return f"raise RuntimeError({message!r})\n"
+
+
 def _cls(root: str, module: str, name: str) -> type:
     return getattr(importlib.import_module(f"{root}.{module}"), name)
 
@@ -501,4 +506,279 @@ class TestAutoBindings:
         assert {i.__name__ for i in seen} == {"RedisCache", "MemCache"}
         assert result == [Binding(icache, icache.impl, False)]
         assert not isinstance(icache.impl, type)
-        assert icache.impl.__name__ == "RedisCache"
+
+
+class TestAstPrefilter:
+    """The default ``ast=True`` static pre-filter: only modules that can hold an
+    interface or an implementation are imported; everything else is left alone,
+    so its import-time side effects never run."""
+
+    def test_skips_modules_without_di_classes(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A module that neither declares an interface nor an implementation — a
+        # router, a settings module, anything — is never imported. The trap
+        # would raise on import; the wiring still succeeds because it is skipped.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "routers/users.py": _trap(),
+            }
+        )
+        result = auto_bindings(root)
+        assert [b.interface.__name__ for b in result] == ["ICache"]
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_skips_interface_consumer_that_does_not_subclass(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The headline case: a module that *uses* an interface (imports it, e.g.
+        # for Depends) without subclassing it is neither an interface nor an
+        # implementation, so it stays unimported.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "routers/users.py": (
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "consumer = ICache\n"
+                    "raise RuntimeError('module must not be imported')\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_disabling_prefilter_imports_every_module(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # With ast=False every module is imported to be inspected, so a module
+        # with import-time side effects runs — the very behaviour the prefilter
+        # avoids.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "routers/users.py": _trap(),
+            }
+        )
+        with pytest.raises(RuntimeError, match="must not be imported"):
+            auto_bindings(root, ast=False)
+
+    def test_resolves_aliased_marker_base(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # An interface declared against an aliased RegistrableDependency import
+        # is still recognised: the alias is resolved back to the original name.
+        root = make_package(
+            {
+                "contracts/cache.py": (
+                    "from fastapi_standalone_di import (\n"
+                    "    RegistrableDependency as RD,\n"
+                    ")\n\n\n"
+                    "class ICache(RD): ...\n"
+                ),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+            }
+        )
+        result = auto_bindings(root)
+        assert [b.interface.__name__ for b in result] == ["ICache"]
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_resolves_aliased_interface_base(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    f"from {_ROOT}.contracts.cache import ICache as Cache\n\n\n"
+                    "class RedisCache(Cache): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_resolves_attribute_interface_base(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    f"from {_ROOT}.contracts import cache\n\n\n"
+                    "class RedisCache(cache.ICache): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_imports_dynamic_base_conservatively(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A base class the analysis cannot resolve statically (here a call) is
+        # never a reason to skip: the module is imported so a real subclass is
+        # never lost.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "def _base() -> type:\n"
+                    "    return ICache\n\n\n"
+                    "class RedisCache(_base()): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_imports_dynamic_marker_base_in_interface_only_scope(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # An interface whose *marker* base is computed dynamically is invisible
+        # to the static analysis. Even in an interface-only scope (pass 2 never
+        # runs), pass 1 imports it anyway, so the interface is still discovered.
+        root = make_package(
+            {
+                "contracts/cache.py": (
+                    "from fastapi_standalone_di import RegistrableDependency\n\n\n"
+                    "def _marker() -> type:\n"
+                    "    return RegistrableDependency\n\n\n"
+                    "class ICache(_marker()): ...\n"
+                ),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+            }
+        )
+        result = auto_bindings(
+            interfaces=[f"{root}.contracts"], implementations=[f"{root}.infra"]
+        )
+        assert [b.interface.__name__ for b in result] == ["ICache"]
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_resolves_generic_base_without_mismatch(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A subscripted generic base resolves to its bare name and never hides
+        # the real interface base declared alongside it.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    "from typing import Generic, TypeVar\n"
+                    f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+                    "T = TypeVar('T')\n\n\n"
+                    "class RedisCache(ICache, Generic[T]): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_star_imported_interface_base_is_imported_conservatively(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A star import hides where a base name comes from; the module is imported
+        # conservatively so an implementation behind it is never lost.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": (
+                    f"from {_ROOT}.contracts.cache import *\n\n\n"
+                    "class RedisCache(ICache): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_unparseable_module_is_imported_and_surfaces(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A module whose source cannot be parsed is imported rather than skipped
+        # — a real defect surfaces here instead of being silently ignored.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "broken/oops.py": "def (:\n",
+            }
+        )
+        with pytest.raises(SyntaxError):
+            auto_bindings(root)
+
+    def test_module_root_without_submodules(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # Roots may be plain modules (no __path__): they are inspected directly,
+        # with nothing to enumerate underneath, in both scan modes.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+            }
+        )
+        for ast_enabled in (True, False):
+            AppState.reset_standalone()
+            _cls(root, "contracts.cache", "ICache").register(None)
+            result = auto_bindings(
+                interfaces=[f"{root}.contracts.cache"],
+                implementations=[f"{root}.infra.redis"],
+                ast=ast_enabled,
+            )
+            assert result[0].implementation.__name__ == "RedisCache"
+
+    def test_exhaustive_walk_binds_across_nesting_and_overlap(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # ast=False keeps the exhaustive import walk: nested implementations are
+        # found, and an overlapping root is visited only once.
+        root = make_package(
+            {
+                "contracts/__init__.py": _iface("ICache"),
+                "infra/deep/redis.py": _impl("RedisCache", "ICache", "contracts"),
+            }
+        )
+        overlapping = auto_bindings(root, interfaces=[f"{root}.contracts"], ast=False)
+        assert overlapping[0].implementation.__name__ == "RedisCache"
+
+        # Reverse order: the shared subtree is visited under the first root, so
+        # the second root's walk skips the already-seen submodules.
+        AppState.reset_standalone()
+        _cls(root, "contracts", "ICache").register(None)
+        reversed_ = auto_bindings(f"{root}.contracts", root, ast=False)
+        assert reversed_[0].implementation.__name__ == "RedisCache"
+
+    def test_exhaustive_walk_non_recursive_stops_at_top_level(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # ast=False, recursive=False: the top-level interface is found but the
+        # nested implementation is not walked, so wiring fails.
+        root = make_package(
+            {
+                "contracts/__init__.py": _iface("ICache"),
+                "infra/deep/redis.py": _impl("RedisCache", "ICache", "contracts"),
+            }
+        )
+        with pytest.raises(AutoBindingError, match="no matching"):
+            auto_bindings(root, ast=False, recursive=False)
+
+
+def test_read_source_returns_none_for_missing_or_unreadable(tmp_path: Path) -> None:
+    # A missing path and an unreadable one (here a directory) both yield None, so
+    # the caller imports the module rather than reasoning from absent source.
+    from fastapi_standalone_di.discovery import _read_source
+
+    assert _read_source(None) is None
+    assert _read_source(str(tmp_path)) is None
+
+
+def test_analyze_module_returns_none_without_source() -> None:
+    # Unreadable source (None) yields no analysis, so the caller imports the
+    # module rather than reasoning from absent source.
+    from fastapi_standalone_di.discovery import _analyze_module
+
+    assert _analyze_module(None) is None
