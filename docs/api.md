@@ -280,19 +280,28 @@ abstract interface inheriting `RegistrableDependency`, bind a concrete class wit
 ### provides
 
 ```python
+@overload
 def provides(fn: Callable[..., T]) -> Callable[..., T]
+@overload
+def provides(*, primary: bool = False) -> Callable[[Callable[..., T]], Callable[..., T]]
 ```
 
 Mark a factory **function** as the implementation of the interface it returns, so
 [`auto_bindings`](#auto_bindings) wires it. An implementation *class* is matched by
 its hierarchy, but a function has no bases; `@provides` names the interface it
-implements through the function's return annotation — the interface itself, or a
+implements through the function's return annotation — the interface itself, a
 concrete implementation of it (matched by the returned type's direct interface
-bases, as for a class).
+bases, as for a class), or a generator's element type (`Iterator[X]` /
+`AsyncIterator[X]`, and the `Generator` forms) for a factory with `yield`
+teardown.
 
 - **Mandatory** on a factory function: a plain function returning an interface is
   left alone.
-- **Optional** on a class (a no-op there — classes are wired by hierarchy).
+- **Optional** on a class for plain wiring (classes are wired by hierarchy), but
+  the marker still applies to a class for ranking.
+- Ranks candidates when several match one interface: a marked candidate (class or
+  factory) beats an unmarked class, and `primary=True` beats every other
+  candidate — settling the tie before any `conflict_solver`.
 - Composes with [`singleton`](#singleton) in either decorator order; the tag
   survives the wrapper, so the singleton wrapper is registered and its cache
   survives. Used alone, the function is rebuilt on every resolution.
@@ -369,20 +378,28 @@ binds each interface to the implementation that declares it as a **direct** base
   [`register_bindings`](#register_bindings)); implementations are typically spread
   across a subtree. Scanning imports every module in the scanned packages, so call
   it once at bootstrap.
-- `conflict_solver` — optional tie-breaker called once per interface with two or
-  more matching implementations, with `(interface, impls)`; returns the chosen
-  candidate (one of `impls`, each an implementation class or a
+- `conflict_solver` — optional tie-breaker called once per interface still
+  ambiguous after the ranking below, with `(interface, contenders)`; returns the
+  chosen candidate (one of `contenders`, each an implementation class or a
   [`@provides`](#provides) function) or `None` to leave the ambiguity unresolved.
 - `ast` — pre-filter the scanned tree by static analysis so only modules that can
   hold an interface or implementation are imported (default `True`); set `False`
   to import every module (running their import-time side effects) when
   implementations are synthesised at import time and so invisible to the analysis.
 
-An interface that already carries its own implementation is left untouched and
-reported with `already_bound=True`. Resolution and registration are two phases:
-if any interface has zero matches or an unresolved ambiguity, nothing is
-registered and an [`AutoBindingError`](#autobindingerror) aggregating every
-problem is raised. Returns every resolved interface as a [`Binding`](#binding),
+When several implementations match one interface, they are ranked before any
+`conflict_solver`: (1) a single [`@provides(primary=True)`](#provides) candidate —
+a class or a factory alike — wins outright (two or more primaries is an error);
+(2) otherwise `@provides`-marked candidates beat unmarked ones (a factory function
+is always marked, an implementation class only when decorated), so a lone marked
+candidate wins over any number of bare classes. Only candidates tied at the
+winning rank reach the `conflict_solver`. An interface that already carries its
+own implementation is left untouched and reported with `already_bound=True`.
+Resolution and registration are two phases: if any interface has zero matches, an
+unresolved ambiguity, several primaries, or a `@provides` carries no interface
+return type, nothing is registered and an [`AutoBindingError`](#autobindingerror)
+aggregating every problem is raised. Returns every resolved interface as a
+[`Binding`](#binding),
 freshly bound and pre-existing alike, ordered by the interface's module and
 qualified name.
 
@@ -425,9 +442,11 @@ leave the ambiguity unresolved.
 
 `ValueError` subclass raised by [`auto_bindings`](#auto_bindings) when it cannot
 wire every discovered interface, aggregating all wiring gaps found in one scan:
-interfaces with no matching implementation, ambiguous interfaces that no
-`conflict_solver` resolved, and [`@provides`](#provides) functions carrying no
-interface return type. Nothing is registered when it is raised.
+interfaces with no matching implementation, ambiguous interfaces that neither a
+`primary` marker nor a `conflict_solver` resolved, interfaces with two or more
+candidates marked [`@provides(primary=True)`](#provides), and
+[`@provides`](#provides) functions carrying no interface return type. Nothing is
+registered when it is raised.
 
 Connection parameters
 ---------------------
