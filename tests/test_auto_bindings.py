@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from fastapi_standalone_di import (
+    AppState,
     AutoBindingError,
     Binding,
+    FastAPIContainer,
     RegistrableDependency,
     auto_bindings,
 )
@@ -54,6 +56,19 @@ def _iface(*names: str) -> str:
 
 def _impl(name: str, base: str, base_module: str) -> str:
     return f"from {_ROOT}.{base_module} import {base}\n\n\nclass {name}({base}): ...\n"
+
+
+def _singleton_impl(
+    name: str, base: str, base_module: str, *, lazy: bool = False
+) -> str:
+    decorator = "@singleton(lazy=True)" if lazy else "@singleton"
+    return (
+        "from fastapi_standalone_di import singleton\n"
+        f"from {_ROOT}.{base_module} import {base}\n\n\n"
+        f"{decorator}\n"
+        f"class {name}({base}):\n"
+        "    def __init__(self) -> None: ...\n"
+    )
 
 
 def _cls(root: str, module: str, name: str) -> type:
@@ -382,3 +397,108 @@ class TestAutoBindings:
         result = auto_bindings(root, interfaces=[f"{root}.contracts"])
         assert len(result) == 1
         assert result[0].interface.__name__ == "ICache"
+
+    async def test_binds_singleton_decorated_implementation(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A ``@singleton``-decorated implementation is a callable, not a class, yet
+        # it is discovered by the class it wraps and the *wrapper* is registered —
+        # so the singleton gate survives instead of being bound away.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _singleton_impl(
+                    "RedisCache", "ICache", "contracts.cache"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        wrapper = icache.impl
+        assert result == [Binding(icache, wrapper, False)]
+        assert not isinstance(wrapper, type)
+        assert wrapper.__name__ == "RedisCache"
+
+        AppState.reset_standalone()
+        try:
+            async with FastAPIContainer() as container:
+                first = await container.get(icache.dependency())
+                second = await container.get(icache.dependency())
+        finally:
+            AppState.reset_standalone()
+        assert first is second
+        assert type(first).__name__ == "RedisCache"
+
+    def test_lazy_singleton_decorated_implementation_is_rejected(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A lazy @singleton delegates to container.get(factory), which
+        # re-dereferences the implementation class back through the interface it
+        # subclasses — a cycle. auto_bindings must reject it, not register a
+        # binding that deadlocks at resolution, and register nothing.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _singleton_impl(
+                    "RedisCache", "ICache", "contracts.cache", lazy=True
+                ),
+            }
+        )
+        icache = _cls(root, "contracts.cache", "ICache")
+        with pytest.raises(AutoBindingError, match="lazy @singleton"):
+            auto_bindings(root)
+        assert icache._impl is None
+
+    def test_unmatched_lazy_singleton_is_ignored_not_rejected(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # A lazy singleton that is not the implementation of any wired interface is
+        # ignored like any other unmatched candidate — only a *selected* lazy
+        # implementation is rejected.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+                "infra/lazy.py": (
+                    "from fastapi_standalone_di import singleton\n\n\n"
+                    "class Base:\n"
+                    "    def __init__(self) -> None: ...\n\n\n"
+                    "@singleton(lazy=True)\n"
+                    "class Standalone(Base): ...\n"
+                ),
+            }
+        )
+        result = auto_bindings(root)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert result == [Binding(icache, icache.impl, False)]
+        assert icache.impl.__name__ == "RedisCache"
+
+    def test_conflict_solver_sees_singleton_underlying_class(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # The solver receives the wrapped classes (real types it can inspect by
+        # base/name), while the wrapper is what ends up registered for its pick.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _singleton_impl(
+                    "RedisCache", "ICache", "contracts.cache"
+                ),
+                "infra/mem.py": _impl("MemCache", "ICache", "contracts.cache"),
+            }
+        )
+        seen: list[type] = []
+
+        def solver(
+            interface: type[RegistrableDependency], impls: list[type]
+        ) -> type | None:
+            seen.extend(impls)
+            return next(i for i in impls if i.__name__ == "RedisCache")
+
+        result = auto_bindings(root, conflict_solver=solver)
+        icache = _cls(root, "contracts.cache", "ICache")
+        assert all(isinstance(i, type) for i in seen)
+        assert {i.__name__ for i in seen} == {"RedisCache", "MemCache"}
+        assert result == [Binding(icache, icache.impl, False)]
+        assert not isinstance(icache.impl, type)
+        assert icache.impl.__name__ == "RedisCache"

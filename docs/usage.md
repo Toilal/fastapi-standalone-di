@@ -376,6 +376,31 @@ def prefer_primary(
 auto_bindings("myapp", conflict_solver=prefer_primary)
 ```
 
+An implementation may be decorated with [`singleton`](#singleton): `auto_bindings`
+discovers it through the class it wraps and registers the wrapper, so the
+application-lifetime cache survives instead of being bound away.
+
+```python
+from fastapi_standalone_di import RegistrableDependency, auto_bindings, singleton
+
+
+class ICache(RegistrableDependency): ...
+
+
+@singleton
+class RedisCache(ICache):
+    def __init__(self) -> None: ...
+
+
+auto_bindings("myapp")  # ICache -> the singleton wrapper of RedisCache
+```
+
+Only the default (eager) mode is wired this way. A lazy `singleton` delegates to
+`container.get(factory)`, which re-dereferences the implementation class back
+through the interface it subclasses — a cycle — so `auto_bindings` rejects a lazy
+implementation with an `AutoBindingError`. Keep an implementation-class singleton
+eager, or register a lazy singleton *factory function* by hand.
+
 Sharing application state
 -------------------------
 
