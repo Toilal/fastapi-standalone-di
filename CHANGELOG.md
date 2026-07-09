@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.11.0 (2026-07-09)
+
+### Features
+
+- @provides ranking (primary + marked>unmarked) and generator unwrapping in auto_bindings
+  ([#56](https://github.com/Toilal/fastapi-standalone-di/pull/56),
+  [`7af3ea9`](https://github.com/Toilal/fastapi-standalone-di/commit/7af3ea97ee25b8be417b4e5b54253cda9f979872))
+
+
 ## v0.10.0 (2026-07-09)
 
 ### Features
