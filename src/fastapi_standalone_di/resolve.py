@@ -41,6 +41,7 @@ import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from http.cookies import SimpleCookie
@@ -172,6 +173,19 @@ Scopes = dict[Callable[..., Any], DependencyScope]
 
 class ScopeError(RuntimeError):
     """Raised on a scope misuse (e.g. resolving a SCOPED dependency without a scope)."""
+
+
+class CyclicDependencyError(RuntimeError):
+    """Raised when a dependency depends on itself, directly or transitively.
+
+    The resolver serialises concurrent builds of a shared dependency on a
+    per-callable lock; a dependency that re-enters its own in-flight build (a
+    cycle) would wait on that lock forever. Detecting the re-entry turns the
+    deadlock into this error. A common cause is a lazy
+    :func:`~fastapi_standalone_di.singleton.singleton` whose factory is the
+    implementation class registered for the very interface it subclasses:
+    resolving it dereferences back to the singleton.
+    """
 
 
 # Sentinels a "required" (no usable default) field carries as ``field_info.default``,
@@ -393,6 +407,16 @@ def _resolve_callable(dep: Callable[..., Any]) -> Callable[..., Any]:
     if inspect.isclass(dep) and issubclass(dep, RegistrableDependency):
         return dep.dependency()
     return dep
+
+
+# The shared dependencies whose build is in flight on the current resolution
+# chain. Held in a ``ContextVar`` so it follows the ``await`` chain within one
+# task — including across a nested ``container.get`` a dependency triggers — yet
+# stays isolated between concurrent resolutions in separate tasks, which must
+# still serialise on the per-callable lock rather than be seen as a cycle.
+_resolving: ContextVar[frozenset[Callable[..., Any]]] = ContextVar(
+    "_fsd_resolving", default=frozenset()
+)
 
 
 # --- public API -----------------------------------------------------------
@@ -800,6 +824,20 @@ class FastAPIContainer:
                 collected=collected,
             )
         else:
+            # A dependency re-entering its own in-flight build would wait on the
+            # lock below forever (same task, so the cache is not yet populated):
+            # that is a cycle, surfaced as an error rather than a deadlock.
+            in_flight = _resolving.get()
+            if call in in_flight:
+                name = getattr(call, "__qualname__", repr(call))
+                raise CyclicDependencyError(
+                    f"{name} depends on itself, directly or through a "
+                    "RegistrableDependency indirection. Resolving it re-enters its "
+                    "own in-flight build. A lazy singleton whose factory is the "
+                    "implementation registered for the interface it subclasses is "
+                    "one cause; make that singleton eager, or register a lazy "
+                    "singleton factory function instead of the class."
+                )
             # Serialise concurrent resolutions of the same shared dependency:
             # without this, two ``get``/``invoke`` racing on a cache miss would
             # both build an instance and both enter the shared exit stack,
@@ -814,16 +852,20 @@ class FastAPIContainer:
                             call, active_scope=active_scope, collected=collected
                         )
                 else:
-                    instance = await self._instantiate(
-                        call,
-                        active_scope=active_scope,
-                        dep_scope=dep_scope,
-                        cache=cache,
-                        use_cache=use_cache,
-                        request=request,
-                        exit_stack=exit_stack,
-                        collected=collected,
-                    )
+                    token = _resolving.set(in_flight | {call})
+                    try:
+                        instance = await self._instantiate(
+                            call,
+                            active_scope=active_scope,
+                            dep_scope=dep_scope,
+                            cache=cache,
+                            use_cache=use_cache,
+                            request=request,
+                            exit_stack=exit_stack,
+                            collected=collected,
+                        )
+                    finally:
+                        _resolving.reset(token)
                     instances[call] = instance
 
         if collected is not None:

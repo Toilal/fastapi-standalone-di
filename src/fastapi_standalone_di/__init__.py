@@ -17,6 +17,7 @@ from fastapi_standalone_di.registration import (
     patch_for_registrable_dependency_support,
 )
 from fastapi_standalone_di.resolve import (
+    CyclicDependencyError,
     DependantCache,
     DependencyOverrides,
     DependencyScope,
@@ -40,6 +41,7 @@ __all__ = [
     "AutoBindingError",
     "Binding",
     "ConflictSolver",
+    "CyclicDependencyError",
     "DependantCache",
     "DependencyOverrides",
     "DependencyScope",
