@@ -458,6 +458,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cyclicdependencyerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        CyclicDependencyError
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -563,6 +574,17 @@
     <span class="md-ellipsis">
       <span class="md-typeset">
         RegistrableDependency
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provides" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        provides
       </span>
     </span>
   </a>
@@ -850,6 +872,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cyclicdependencyerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        CyclicDependencyError
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -955,6 +988,17 @@
     <span class="md-ellipsis">
       <span class="md-typeset">
         RegistrableDependency
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provides" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        provides
       </span>
     </span>
   </a>
@@ -1159,26 +1203,28 @@ package:</p>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">AutoBindingError</span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">Binding</span><span class="p">,</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">ConflictSolver</span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">DependantCache</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">DependencyOverrides</span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">DependencyScope</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">FastAPIContainer</span><span class="p">,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">MissingParameterError</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">ParamSource</span><span class="p">,</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">ParameterError</span><span class="p">,</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">ParameterValidationError</span><span class="p">,</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">RegistrableDependency</span><span class="p">,</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">ResolutionScope</span><span class="p">,</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">ResolvedDependencies</span><span class="p">,</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">ScopeError</span><span class="p">,</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">auto_bindings</span><span class="p">,</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">get_app_state</span><span class="p">,</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">get_container</span><span class="p">,</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">patch_for_registrable_dependency_support</span><span class="p">,</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="n">register_bindings</span><span class="p">,</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    <span class="n">set_app_state_value</span><span class="p">,</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="n">singleton</span><span class="p">,</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">CyclicDependencyError</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">DependantCache</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">DependencyOverrides</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">DependencyScope</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">FastAPIContainer</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">MissingParameterError</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">ParamSource</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">ParameterError</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">ParameterValidationError</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">RegistrableDependency</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">ResolutionScope</span><span class="p">,</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">ResolvedDependencies</span><span class="p">,</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">ScopeError</span><span class="p">,</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">auto_bindings</span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">get_app_state</span><span class="p">,</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">get_container</span><span class="p">,</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="n">patch_for_registrable_dependency_support</span><span class="p">,</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    <span class="n">provides</span><span class="p">,</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    <span class="n">register_bindings</span><span class="p">,</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    <span class="n">set_app_state_value</span><span class="p">,</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="n">singleton</span><span class="p">,</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="p">)</span>
 </span></code></pre></div>
 <h2 id="container">Container<a class="headerlink" href="#container" title="Permanent link">&para;</a></h2>
 <h3 id="fastapicontainer">FastAPIContainer<a class="headerlink" href="#fastapicontainer" title="Permanent link">&para;</a></h3>
@@ -1278,6 +1324,14 @@ outlive the scope.</p>
 <p><code>RuntimeError</code> subclass raised on scope misuse: resolving a <code>SCOPED</code> dependency
 without an active scope, or a <code>CONTAINER</code>-scoped dependency depending on a
 <code>SCOPED</code> one (a captive dependency).</p>
+<h3 id="cyclicdependencyerror">CyclicDependencyError<a class="headerlink" href="#cyclicdependencyerror" title="Permanent link">&para;</a></h3>
+<p><code>RuntimeError</code> subclass raised when a dependency re-enters its own in-flight
+build — a cycle. Without detection the resolver, which serialises concurrent
+builds of a shared dependency on a per-callable lock, would wait on that lock
+forever. A common cause is a lazy <a href="#singleton"><code>singleton</code></a> whose factory is the
+implementation class registered for the very interface it subclasses: resolving
+it dereferences back to the singleton. Make such a singleton eager, or register a
+lazy singleton <strong>factory function</strong> instead of the class.</p>
 <h2 id="application-state">Application state<a class="headerlink" href="#application-state" title="Permanent link">&para;</a></h2>
 <h3 id="appstate">AppState<a class="headerlink" href="#appstate" title="Permanent link">&para;</a></h3>
 <p>Abstraction over Starlette's <code>State</code> that works with and without a request. In
@@ -1372,8 +1426,36 @@ abstract interface inheriting <code>RegistrableDependency</code>, bind a concret
   <code>RuntimeError</code> when none is registered.</li>
 <li><code>Interface.impl</code> — class property returning the registered implementation.</li>
 </ul>
+<h3 id="provides">provides<a class="headerlink" href="#provides" title="Permanent link">&para;</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nd">@overload</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">provides</span><span class="p">(</span><span class="n">fn</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nd">@overload</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="k">def</span><span class="w"> </span><span class="nf">provides</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">primary</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]],</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">T</span><span class="p">]]</span>
+</span></code></pre></div>
+<p>Mark a factory <strong>function</strong> as the implementation of the interface it returns, so
+<a href="#auto_bindings"><code>auto_bindings</code></a> wires it. An implementation <em>class</em> is matched by
+its hierarchy, but a function has no bases; <code>@provides</code> names the interface it
+implements through the function's return annotation — the interface itself, a
+concrete implementation of it (matched by the returned type's direct interface
+bases, as for a class), or a generator's element type (<code>Iterator[X]</code> /
+<code>AsyncIterator[X]</code>, and the <code>Generator</code> forms) for a factory with <code>yield</code>
+teardown.</p>
+<ul>
+<li><strong>Mandatory</strong> on a factory function: a plain function returning an interface is
+  left alone.</li>
+<li><strong>Optional</strong> on a class for plain wiring (classes are wired by hierarchy), but
+  the marker still applies to a class for ranking.</li>
+<li>Ranks candidates when several match one interface: a marked candidate (class or
+  factory) beats an unmarked class, and <code>primary=True</code> beats every other
+  candidate — settling the tie before any <code>conflict_solver</code>.</li>
+<li>Composes with <a href="#singleton"><code>singleton</code></a> in either decorator order; the tag
+  survives the wrapper, so the singleton wrapper is registered and its cache
+  survives. Used alone, the function is rebuilt on every resolution.</li>
+<li>A return type carrying no interface — <code>Any</code>, missing, or unrelated to
+  <code>RegistrableDependency</code> — is reported as an <a href="#autobindingerror"><code>AutoBindingError</code></a>.</li>
+</ul>
 <h3 id="patch_for_registrable_dependency_support">patch_for_registrable_dependency_support<a class="headerlink" href="#patch_for_registrable_dependency_support" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">patch_for_registrable_dependency_support</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">patch_for_registrable_dependency_support</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </span></code></pre></div>
 <p>Patch <code>fastapi.params.Depends</code> so it resolves a <code>RegistrableDependency</code> eagerly.
 Only needed when FastAPI itself must see the concrete implementation at
@@ -1382,13 +1464,13 @@ patch mutates the class in place, so it affects every <code>Depends()</code> obj
 regardless of when it was created — order relative to this call no longer
 matters. Returns <code>True</code> if applied, <code>False</code> if already patched.</p>
 <h3 id="register_bindings">register_bindings<a class="headerlink" href="#register_bindings" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_bindings</span><span class="p">(</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>    <span class="n">module</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;di&quot;</span><span class="p">,</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">attr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;register&quot;</span><span class="p">,</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">warn_missing</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_bindings</span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">module</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;di&quot;</span><span class="p">,</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">attr</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;register&quot;</span><span class="p">,</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">warn_missing</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 <p>Discover per-feature binding modules and run them, so every
 <code>RegistrableDependency</code> is bound before the routers are mounted. For each
@@ -1407,13 +1489,14 @@ calls its <code>attr</code> callable.</p>
 a binding module propagates. Raises <code>ValueError</code> if a <code>packages</code> entry is not a
 package.</p>
 <h3 id="auto_bindings">auto_bindings<a class="headerlink" href="#auto_bindings" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">auto_bindings</span><span class="p">(</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">interfaces</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">implementations</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">conflict_solver</span><span class="p">:</span> <span class="n">ConflictSolver</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Binding</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">auto_bindings</span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="o">*</span><span class="n">packages</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">interfaces</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">implementations</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ModuleType</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">conflict_solver</span><span class="p">:</span> <span class="n">ConflictSolver</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">ast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Binding</span><span class="p">]</span>
 </span></code></pre></div>
 <p>Wire <code>RegistrableDependency</code> interfaces to their implementations by convention,
 deriving the bindings from the class hierarchy instead of hand-written
@@ -1430,44 +1513,70 @@ binds each interface to the implementation that declares it as a <strong>direct<
   <a href="#register_bindings"><code>register_bindings</code></a>); implementations are typically spread
   across a subtree. Scanning imports every module in the scanned packages, so call
   it once at bootstrap.</li>
-<li><code>conflict_solver</code> — optional tie-breaker called once per interface with two or
-  more matching implementations, with <code>(interface, impls)</code>; returns the chosen
-  candidate (one of <code>impls</code>) or <code>None</code> to leave the ambiguity unresolved.</li>
+<li><code>conflict_solver</code> — optional tie-breaker called once per interface still
+  ambiguous after the ranking below, with <code>(interface, contenders)</code>; returns the
+  chosen candidate (one of <code>contenders</code>, each an implementation class or a
+  <a href="#provides"><code>@provides</code></a> function) or <code>None</code> to leave the ambiguity unresolved.</li>
+<li><code>ast</code> — pre-filter the scanned tree by static analysis so only modules that can
+  hold an interface or implementation are imported (default <code>True</code>); set <code>False</code>
+  to import every module (running their import-time side effects) when
+  implementations are synthesised at import time and so invisible to the analysis.</li>
 </ul>
-<p>An interface that already carries its own implementation is left untouched and
-reported with <code>already_bound=True</code>. Resolution and registration are two phases:
-if any interface has zero matches or an unresolved ambiguity, nothing is
-registered and an <a href="#autobindingerror"><code>AutoBindingError</code></a> aggregating every
-problem is raised. Returns every resolved interface as a <a href="#binding"><code>Binding</code></a>,
+<p>When several implementations match one interface, they are ranked before any
+<code>conflict_solver</code>: (1) a single <a href="#provides"><code>@provides(primary=True)</code></a> candidate —
+a class or a factory alike — wins outright (two or more primaries is an error);
+(2) otherwise <code>@provides</code>-marked candidates beat unmarked ones (a factory function
+is always marked, an implementation class only when decorated), so a lone marked
+candidate wins over any number of bare classes. Only candidates tied at the
+winning rank reach the <code>conflict_solver</code>. An interface that already carries its
+own implementation is left untouched and reported with <code>already_bound=True</code>.
+Resolution and registration are two phases: if any interface has zero matches, an
+unresolved ambiguity, several primaries, or a <code>@provides</code> carries no interface
+return type, nothing is registered and an <a href="#autobindingerror"><code>AutoBindingError</code></a>
+aggregating every problem is raised. Returns every resolved interface as a
+<a href="#binding"><code>Binding</code></a>,
 freshly bound and pre-existing alike, ordered by the interface's module and
 qualified name.</p>
+<p>An implementation class decorated with <a href="#singleton"><code>singleton</code></a> (eager or lazy)
+is discovered through the class it wraps and registered as the wrapper, so its
+application-lifetime cache is preserved. A factory <strong>function</strong> is wired only when
+marked with <a href="#provides"><code>provides</code></a>, matched by its return annotation (a function
+has no bases); a <code>@provides</code> carrying no interface return type is reported as an
+error.</p>
 <h3 id="binding">Binding<a class="headerlink" href="#binding" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Binding</span><span class="p">(</span><span class="n">NamedTuple</span><span class="p">):</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">interface</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">RegistrableDependency</span><span class="p">]</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">implementation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">already_bound</span><span class="p">:</span> <span class="nb">bool</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">Binding</span><span class="p">(</span><span class="n">NamedTuple</span><span class="p">):</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">interface</span><span class="p">:</span> <span class="nb">type</span><span class="p">[</span><span class="n">RegistrableDependency</span><span class="p">]</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    <span class="n">implementation</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">already_bound</span><span class="p">:</span> <span class="nb">bool</span>
 </span></code></pre></div>
 <p>One resolved interface→implementation link returned by
 <a href="#auto_bindings"><code>auto_bindings</code></a>. <code>already_bound</code> is <code>True</code> for an interface that
 carried an implementation before the call (left untouched, reported for
 completeness) and <code>False</code> for one bound by the call itself.</p>
 <h3 id="conflictsolver">ConflictSolver<a class="headerlink" href="#conflictsolver" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">ConflictSolver</span> <span class="o">=</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">type</span><span class="p">[</span><span class="n">RegistrableDependency</span><span class="p">],</span> <span class="nb">list</span><span class="p">[</span><span class="nb">type</span><span class="p">]],</span> <span class="nb">type</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">ConflictSolver</span> <span class="o">=</span> <span class="n">Callable</span><span class="p">[</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="p">[</span><span class="nb">type</span><span class="p">[</span><span class="n">RegistrableDependency</span><span class="p">],</span> <span class="nb">list</span><span class="p">[</span><span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="p">]</span>
 </span></code></pre></div>
 <p>Type alias for the <a href="#auto_bindings"><code>auto_bindings</code></a> <code>conflict_solver</code> callback:
-given an interface and its candidate implementations, return the chosen candidate
-or <code>None</code> to leave the ambiguity unresolved.</p>
+given an interface and its candidate implementations (each an implementation class
+or a <a href="#provides"><code>@provides</code></a> function), return the chosen candidate or <code>None</code> to
+leave the ambiguity unresolved.</p>
 <h3 id="autobindingerror">AutoBindingError<a class="headerlink" href="#autobindingerror" title="Permanent link">&para;</a></h3>
 <p><code>ValueError</code> subclass raised by <a href="#auto_bindings"><code>auto_bindings</code></a> when it cannot
 wire every discovered interface, aggregating all wiring gaps found in one scan:
-interfaces with no matching implementation, and ambiguous interfaces that no
-<code>conflict_solver</code> resolved. Nothing is registered when it is raised.</p>
+interfaces with no matching implementation, ambiguous interfaces that neither a
+<code>primary</code> marker nor a <code>conflict_solver</code> resolved, interfaces with two or more
+candidates marked <a href="#provides"><code>@provides(primary=True)</code></a>, and
+<a href="#provides"><code>@provides</code></a> functions carrying no interface return type. Nothing is
+registered when it is raised.</p>
 <h2 id="connection-parameters">Connection parameters<a class="headerlink" href="#connection-parameters" title="Permanent link">&para;</a></h2>
 <h3 id="paramsource">ParamSource<a class="headerlink" href="#paramsource" title="Permanent link">&para;</a></h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">ParamSource</span><span class="p">:</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="n">values</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">default</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">ParamSource</span><span class="p">:</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="n">values</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="n">default</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span></code></pre></div>
 <p>How to supply one class of connection parameters (query / path / header /
 cookie). <code>values</code> are explicit values keyed by parameter name (falling back to
