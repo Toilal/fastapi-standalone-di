@@ -697,6 +697,30 @@ class TestAutoBindings:
         build_store = _cls(root, "infra.factory", "build_store")
         assert result == [Binding(istore, build_store, False)]
 
+    def test_provides_unresolvable_return_forward_ref_is_reported(
+        self, make_package: Callable[[dict[str, str]], str]
+    ) -> None:
+        # Under ``from __future__ import annotations`` the return type is a string.
+        # When it names something the factory's module cannot resolve, evaluating
+        # it fails and the factory carries no return class — a reported misuse.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/factory.py": (
+                    "from __future__ import annotations\n"
+                    "from fastapi_standalone_di import provides\n\n\n"
+                    "@provides\n"
+                    "def build() -> Missing:\n"
+                    "    raise NotImplementedError\n"
+                ),
+            }
+        )
+        with pytest.raises(AutoBindingError) as excinfo:
+            auto_bindings(root)
+        message = str(excinfo.value)
+        assert "build" in message
+        assert "@provides has no resolvable return type" in message
+
     def test_provides_without_return_type_is_reported(
         self, make_package: Callable[[dict[str, str]], str]
     ) -> None:
