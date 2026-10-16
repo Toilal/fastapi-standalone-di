@@ -792,6 +792,55 @@ that owns it closes — so a fresh (`use_cache=False`) generator at `CONTAINER`
 scope is held until `aclose()`; put transient resources in a `SCOPED` scope sized
 as one unit of work.
 
+Execution model
+---------------
+
+Like FastAPI, the container calls a sync dependency (a `def` function or a class)
+through the threadpool, since it cannot tell whether its body blocks. That hop
+costs about 60 µs, far more than building a class whose `__init__` only stores its
+arguments. Two opt-ins call such dependencies inline, on the event loop:
+
+- [`loop_safe`](./api.md#loop_safe) marks one function or class (it returns the
+  same object, so `Depends`, bindings and overrides keep working); the marker is
+  not inherited by subclasses;
+- `FastAPIContainer(inline_classes=True)` treats every class as loop-safe.
+
+```python
+import asyncio
+
+from fastapi import Depends
+
+from fastapi_standalone_di import FastAPIContainer, loop_safe
+
+
+@loop_safe
+def get_settings() -> dict[str, str]:
+    return {"db_url": "postgres://localhost/app"}
+
+
+class Database:
+    def __init__(self, settings: dict[str, str] = Depends(get_settings)) -> None:
+        self.url = settings["db_url"]
+
+
+async def main() -> None:
+    async with FastAPIContainer(inline_classes=True) as container:
+        db = await container.get(Database)  # no threadpool hop
+        print(db.url)
+
+
+asyncio.run(main())
+```
+
+A loop-safe callable must never block: no I/O, no lock, no heavy computation. A
+dependency that fetches a signing key over HTTP on a cache miss, for instance,
+must stay in the threadpool. The decision applies to the callable actually called,
+after `dependency_overrides`. `singleton()` follows the factory's own `loop_safe`
+marker only.
+
+The marker is the `__fastapi_loop_safe__` attribute, shared with
+`fastapi-cache-di`: a callable marked by either library is recognised by both.
+
 Concurrency
 -----------
 

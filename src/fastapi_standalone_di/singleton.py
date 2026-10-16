@@ -48,6 +48,7 @@ from fastapi_standalone_di._compat import (
     is_gen_callable,
 )
 from fastapi_standalone_di.app_state import AppState, get_app_state
+from fastapi_standalone_di.execution import is_loop_safe
 
 T = TypeVar("T")
 
@@ -121,6 +122,9 @@ def _build_eager(factory: Callable[..., T], key: str) -> Callable[..., T]:
     hints = get_type_hints(factory, include_extras=True)
     app_state_param = _fresh_param_name(signature, "app_state")
     factory_is_async = is_coroutine_callable(factory)
+    # The wrapper runs inside a FastAPI request as well as in a container, so no
+    # container option can reach it: only the factory's own marker applies.
+    factory_is_loop_safe = is_loop_safe(factory)
 
     async def wrapper(**kwargs: Any) -> Any:
         app_state: AppState = kwargs.pop(app_state_param)
@@ -133,6 +137,8 @@ def _build_eager(factory: Callable[..., T], key: str) -> Callable[..., T]:
                 return cached
             if factory_is_async:
                 instance = await cast("Any", factory(**kwargs))
+            elif factory_is_loop_safe:
+                instance = factory(**kwargs)
             else:
                 instance = await run_in_threadpool(factory, **kwargs)
             app_state.set(key, instance)
