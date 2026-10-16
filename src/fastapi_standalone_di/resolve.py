@@ -58,7 +58,7 @@ from starlette.datastructures import State
 from starlette.requests import Request
 
 from fastapi_standalone_di._compat import (
-    _unwrap,
+    _impartial,
     is_async_gen_callable,
     is_coroutine_callable,
     is_gen_callable,
@@ -497,7 +497,7 @@ class FastAPIContainer:
 
     def _runs_on_loop(self, call: Callable[..., Any]) -> bool:
         """True if the sync *call* is called inline rather than in the threadpool."""
-        is_class = inspect.isclass(_unwrap(call))
+        is_class = inspect.isclass(_impartial(call))
         return (self._inline_classes and is_class) or is_loop_safe(call)
 
     def _seed_container_instances(self) -> None:
