@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.12.0 (2026-10-16)
+
+### Bug Fixes
+
+- Await functools.wraps-wrapped coroutine dependencies like FastAPI
+  ([`682ef1d`](https://github.com/Toilal/fastapi-standalone-di/commit/682ef1d01cc1a58ec0ea92f8eebe241ed00d585e))
+
+### Features
+
+- Call loop-safe sync dependencies without a threadpool hop
+  ([`81d7e23`](https://github.com/Toilal/fastapi-standalone-di/commit/81d7e2355d1da69d13fee5e0bb62bbf0d2c4f2f8))
+
+
 ## v0.11.1 (2026-07-09)
 
 ### Bug Fixes
