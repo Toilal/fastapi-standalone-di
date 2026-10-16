@@ -2,7 +2,7 @@
 
 import functools
 from collections.abc import AsyncIterator, Callable, Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -143,6 +143,14 @@ def test_classification_matches_fastapi(
         is_gen_callable(call),
         is_async_gen_callable(call),
     ) == expected
+
+
+def test_non_callable_is_none_of_the_kinds() -> None:
+    not_callable = cast("Callable[..., Any]", object())
+
+    assert not is_coroutine_callable(not_callable)
+    assert not is_gen_callable(not_callable)
+    assert not is_async_gen_callable(not_callable)
 
 
 async def test_container_awaits_a_wraps_wrapper_of_a_coroutine() -> None:
