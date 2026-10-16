@@ -463,6 +463,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#execution-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Execution model
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#concurrency" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
@@ -705,6 +716,17 @@
     <span class="md-ellipsis">
       <span class="md-typeset">
         Dependency scopes
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Execution model
       </span>
     </span>
   </a>
@@ -1445,6 +1467,52 @@ each injection point. A <code>yield</code> dependency's resources stay open unti
 that owns it closes — so a fresh (<code>use_cache=False</code>) generator at <code>CONTAINER</code>
 scope is held until <code>aclose()</code>; put transient resources in a <code>SCOPED</code> scope sized
 as one unit of work.</p>
+<h2 id="execution-model">Execution model<a class="headerlink" href="#execution-model" title="Permanent link">&para;</a></h2>
+<p>Like FastAPI, the container calls a sync dependency (a <code>def</code> function or a class)
+through the threadpool, since it cannot tell whether its body blocks. That hop
+costs about 60 µs, far more than building a class whose <code>__init__</code> only stores its
+arguments. Two opt-ins call such dependencies inline, on the event loop:</p>
+<ul>
+<li><a href=".././api/#loop_safe"><code>loop_safe</code></a> marks one function or class (it returns the
+  same object, so <code>Depends</code>, bindings and overrides keep working); the marker is
+  not inherited by subclasses;</li>
+<li><code>FastAPIContainer(inline_classes=True)</code> treats every class as loop-safe.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">Depends</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi_standalone_di</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPIContainer</span><span class="p">,</span> <span class="n">loop_safe</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nd">@loop_safe</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">get_settings</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a>    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;db_url&quot;</span><span class="p">:</span> <span class="s2">&quot;postgres://localhost/app&quot;</span><span class="p">}</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="k">class</span><span class="w"> </span><span class="nc">Database</span><span class="p">:</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">settings</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Depends</span><span class="p">(</span><span class="n">get_settings</span><span class="p">))</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">url</span> <span class="o">=</span> <span class="n">settings</span><span class="p">[</span><span class="s2">&quot;db_url&quot;</span><span class="p">]</span>
+</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a>
+</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a>
+</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a>    <span class="k">async</span> <span class="k">with</span> <span class="n">FastAPIContainer</span><span class="p">(</span><span class="n">inline_classes</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">container</span><span class="p">:</span>
+</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20" href="#__codelineno-22-20"></a>        <span class="n">db</span> <span class="o">=</span> <span class="k">await</span> <span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">Database</span><span class="p">)</span>  <span class="c1"># no threadpool hop</span>
+</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a>        <span class="nb">print</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">url</span><span class="p">)</span>
+</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a>
+</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a>
+</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a><span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</span></code></pre></div>
+<p>A loop-safe callable must never block: no I/O, no lock, no heavy computation. A
+dependency that fetches a signing key over HTTP on a cache miss, for instance,
+must stay in the threadpool. The decision applies to the callable actually called,
+after <code>dependency_overrides</code>. <code>singleton()</code> follows the factory's own <code>loop_safe</code>
+marker only.</p>
+<p>The marker is the <code>__fastapi_loop_safe__</code> attribute, shared with
+<code>fastapi-cache-di</code>: a callable marked by either library is recognised by both.</p>
+<p>The container tells coroutines and generators apart exactly like FastAPI 0.143.1,
+whatever FastAPI version is installed: <code>functools.partial</code> and <code>functools.wraps</code>
+wrappers are unwrapped, and a class is never classified through its <code>__call__</code>.</p>
 <h2 id="concurrency">Concurrency<a class="headerlink" href="#concurrency" title="Permanent link">&para;</a></h2>
 <p>Resolution is concurrency-safe: several <code>get</code>/<code>resolve</code>/<code>invoke</code> calls may run
 concurrently on the same container (e.g. under <code>asyncio.gather</code>). Concurrent
