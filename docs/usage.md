@@ -841,6 +841,10 @@ marker only.
 The marker is the `__fastapi_loop_safe__` attribute, shared with
 `fastapi-cache-di`: a callable marked by either library is recognised by both.
 
+The container tells coroutines and generators apart exactly like FastAPI 0.143.1,
+whatever FastAPI version is installed: `functools.partial` and `functools.wraps`
+wrappers are unwrapped, and a class is never classified through its `__call__`.
+
 Concurrency
 -----------
 

@@ -1,5 +1,10 @@
 """Use FastAPI's dependency injection outside of any web/ASGI context."""
 
+from fastapi_standalone_di._compat import (
+    is_async_gen_callable,
+    is_coroutine_callable,
+    is_gen_callable,
+)
 from fastapi_standalone_di.app_state import (
     AppState,
     get_app_state,
@@ -61,6 +66,9 @@ __all__ = [
     "container_lifespan",
     "get_app_state",
     "get_container",
+    "is_async_gen_callable",
+    "is_coroutine_callable",
+    "is_gen_callable",
     "is_loop_safe",
     "loop_safe",
     "patch_for_registrable_dependency_support",

@@ -14,7 +14,7 @@ without one depending on the other. Its name must therefore never change.
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from fastapi_standalone_di._compat import _unwrap
+from fastapi_standalone_di._compat import _impartial
 
 LOOP_SAFE_ATTR = "__fastapi_loop_safe__"
 
@@ -38,5 +38,5 @@ def is_loop_safe(call: Callable[..., Any]) -> bool:
     The marker is read from the object's own namespace, never inherited: a
     subclass may redefine a blocking ``__init__`` and must be marked on its own.
     """
-    namespace = getattr(_unwrap(call), "__dict__", None)
+    namespace = getattr(_impartial(call), "__dict__", None)
     return namespace is not None and namespace.get(LOOP_SAFE_ATTR) is True

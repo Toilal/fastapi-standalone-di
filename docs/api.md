@@ -28,6 +28,9 @@ from fastapi_standalone_di import (
     auto_bindings,
     get_app_state,
     get_container,
+    is_async_gen_callable,
+    is_coroutine_callable,
+    is_gen_callable,
     is_loop_safe,
     loop_safe,
     patch_for_registrable_dependency_support,
@@ -292,6 +295,19 @@ def is_loop_safe(call: Callable[..., Any]) -> bool
 
 `True` if `call` itself carries the loop-safe marker (`functools.partial` is
 unwrapped).
+
+### is_coroutine_callable, is_gen_callable, is_async_gen_callable
+
+```python
+def is_coroutine_callable(call: Callable[..., Any]) -> bool
+def is_gen_callable(call: Callable[..., Any]) -> bool
+def is_async_gen_callable(call: Callable[..., Any]) -> bool
+```
+
+The detection the container uses to pick how to call a dependency, identical to
+FastAPI 0.143.1 whatever FastAPI version is installed: `functools.partial` and
+`functools.wraps` wrappers are unwrapped, and a class is never classified through
+its `__call__`.
 
 Registrable dependencies
 ------------------------
