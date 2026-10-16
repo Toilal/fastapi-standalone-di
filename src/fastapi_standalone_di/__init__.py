@@ -12,6 +12,7 @@ from fastapi_standalone_di.discovery import (
     auto_bindings,
     register_bindings,
 )
+from fastapi_standalone_di.execution import is_loop_safe, loop_safe
 from fastapi_standalone_di.provides import provides
 from fastapi_standalone_di.registration import (
     RegistrableDependency,
@@ -60,6 +61,8 @@ __all__ = [
     "container_lifespan",
     "get_app_state",
     "get_container",
+    "is_loop_safe",
+    "loop_safe",
     "patch_for_registrable_dependency_support",
     "provides",
     "register_bindings",

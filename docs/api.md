@@ -28,6 +28,8 @@ from fastapi_standalone_di import (
     auto_bindings,
     get_app_state,
     get_container,
+    is_loop_safe,
+    loop_safe,
     patch_for_registrable_dependency_support,
     provides,
     register_bindings,
@@ -58,6 +60,7 @@ FastAPIContainer(
     headers: ParamSource | Mapping[str, str] | None = None,
     cookies: ParamSource | Mapping[str, str] | None = None,
     security_scopes: Sequence[str] | None = None,
+    inline_classes: bool = False,
 )
 ```
 
@@ -80,6 +83,8 @@ Constructor arguments:
   [`ParamSource`](#paramsource) or a bare `{name: value}` mapping. See
   [Parameters & connection](./parameters.md).
 - `security_scopes` — the scopes exposed to any `SecurityScopes` parameter.
+- `inline_classes` — call every class dependency directly on the event loop
+  instead of through the threadpool. See [Execution model](#execution-model).
 
 Resolution methods (all coroutines):
 
@@ -260,6 +265,33 @@ result is a drop-in dependency for `Depends(...)` or `container.get(...)`.
       [`container_lifespan`](#container_lifespan); standalone, the resolving
       container provides itself. No container is needed when the value is preset
       under `key` — the preset short-circuits construction.
+
+In eager mode, a sync factory marked with [`loop_safe`](#loop_safe) is called on
+the event loop; the container's `inline_classes` option does not reach it.
+
+Execution model
+---------------
+
+### loop_safe
+
+```python
+def loop_safe(obj: T) -> T
+```
+
+Mark a sync function or a class as safe to call directly on the event loop, and
+return the same object (so `Depends`, bindings and `dependency_overrides` keep
+working). The marker is the `__fastapi_loop_safe__` attribute, shared with
+`fastapi-cache-di`. It is not inherited by subclasses. A loop-safe callable must
+never block.
+
+### is_loop_safe
+
+```python
+def is_loop_safe(call: Callable[..., Any]) -> bool
+```
+
+`True` if `call` itself carries the loop-safe marker (`functools.partial` is
+unwrapped).
 
 Registrable dependencies
 ------------------------

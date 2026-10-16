@@ -54,8 +54,9 @@ asyncio.run(main())
 
 Sub-dependencies, `yield` teardown, caching, scopes, dependency overrides,
 registrable interfaces, per-package binding discovery, shared app state,
-application-lifetime singletons, standalone `Request`/`Response` stubs, and
-query/path/header/cookie parameters are all covered in the documentation.
+application-lifetime singletons, loop-safe execution without a threadpool hop,
+standalone `Request`/`Response` stubs, and query/path/header/cookie parameters are
+all covered in the documentation.
 
 ## Documentation
 

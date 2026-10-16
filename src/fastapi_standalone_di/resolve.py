@@ -58,11 +58,13 @@ from starlette.datastructures import State
 from starlette.requests import Request
 
 from fastapi_standalone_di._compat import (
+    _unwrap,
     is_async_gen_callable,
     is_coroutine_callable,
     is_gen_callable,
 )
 from fastapi_standalone_di.app_state import AppState, get_app_state
+from fastapi_standalone_di.execution import is_loop_safe
 from fastapi_standalone_di.registration import RegistrableDependency
 
 T = TypeVar("T")
@@ -428,8 +430,11 @@ class FastAPIContainer:
     Encapsulates the configuration needed to resolve a dependency tree:
     application state, dependency overrides, introspection cache, the
     :class:`DependencyScope` policy, the query/path/header/cookie parameter
-    values to supply outside ASGI (see :class:`ParamSource`), and the security
-    scopes to expose to any ``SecurityScopes`` parameter.
+    values to supply outside ASGI (see :class:`ParamSource`), the security
+    scopes to expose to any ``SecurityScopes`` parameter, and the execution
+    model of sync dependencies: like FastAPI, they run in the threadpool unless
+    marked :func:`~fastapi_standalone_di.execution.loop_safe`, or unless they are
+    classes and ``inline_classes`` is set.
 
     Example::
 
@@ -459,6 +464,7 @@ class FastAPIContainer:
         headers: ParamSourceArg | None = None,
         cookies: ParamSourceArg | None = None,
         security_scopes: Sequence[str] | None = None,
+        inline_classes: bool = False,
     ) -> None:
         self._app_state = app_state if app_state is not None else AppState.standalone()
         self._dependency_overrides = dependency_overrides or {}
@@ -482,11 +488,17 @@ class FastAPIContainer:
 
         self._default_scope = default_scope
         self._scopes = scopes or {}
+        self._inline_classes = inline_classes
 
         self._container_instances: dict[Callable[..., Any], Any] = {}
         self._seed_container_instances()
         self._container_stack = AsyncExitStack()
         self._container_locks: dict[Callable[..., Any], asyncio.Lock] = {}
+
+    def _runs_on_loop(self, call: Callable[..., Any]) -> bool:
+        """True if the sync *call* is called inline rather than in the threadpool."""
+        is_class = inspect.isclass(_unwrap(call))
+        return (self._inline_classes and is_class) or is_loop_safe(call)
 
     def _seed_container_instances(self) -> None:
         """Pre-populate the ``get_app_state`` and ``get_container`` instances.
@@ -1034,6 +1046,8 @@ class FastAPIContainer:
             instance = await exit_stack.enter_async_context(cm)
         elif is_coroutine_callable(effective_call):
             instance = await effective_call(**sub_values)
+        elif self._runs_on_loop(effective_call):
+            instance = effective_call(**sub_values)
         else:
             instance = await run_in_threadpool(effective_call, **sub_values)
 
