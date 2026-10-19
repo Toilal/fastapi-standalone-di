@@ -1459,7 +1459,7 @@ they go to a module-level singleton dict.</p>
 <p>FastAPI dependency returning an <code>AppState</code>. When injected by FastAPI, <code>request</code> is
 provided and the <code>AppState</code> delegates to <code>request.app.state</code>; resolved standalone
 (e.g. via <code>FastAPIContainer</code>) <code>request</code> is <code>None</code> and the standalone singleton is
-used.</p>
+used. Marked <a href="#loop_safe"><code>loop_safe</code></a>.</p>
 <h3 id="set_app_state_value">set_app_state_value<a class="headerlink" href="#set_app_state_value" title="Permanent link">&para;</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">set_app_state_value</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
@@ -1473,7 +1473,7 @@ in <code>app_state</code> at startup, e.g. via
 <code>set_app_state_value("container", FastAPIContainer(...))</code>. Raises <code>RuntimeError</code>
 if no container is registered. When resolved <em>through</em> a container, it yields that
 container itself, so <code>Depends(get_container)</code> works standalone without registering
-anything.</p>
+anything. Marked <a href="#loop_safe"><code>loop_safe</code></a>.</p>
 <h3 id="container_lifespan">container_lifespan<a class="headerlink" href="#container_lifespan" title="Permanent link">&para;</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nd">@asynccontextmanager</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">container_lifespan</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">FastAPI</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AsyncIterator</span><span class="p">[</span><span class="kc">None</span><span class="p">]</span>
