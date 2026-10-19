@@ -2,12 +2,12 @@
 
 import asyncio
 import inspect
-import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from _asgi import asgi_get
 from _future_annotations_deps import FutureDb, build_future_db
 from fastapi import Depends, FastAPI
 
@@ -29,40 +29,6 @@ def _reset_standalone() -> Iterator[None]:
     AppState.reset_standalone()
     yield
     AppState.reset_standalone()
-
-
-async def _asgi_get(app: FastAPI, path: str) -> Any:
-    """Drive the ASGI app for one GET and return its decoded JSON body.
-
-    Speaks the ASGI protocol directly rather than via Starlette's ``TestClient``,
-    which pulls in ``requests`` on older Starlette releases and so is unavailable
-    across the whole supported FastAPI range.
-    """
-    scope = {
-        "type": "http",
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode("ascii"),
-        "root_path": "",
-        "query_string": b"",
-        "headers": [],
-        "client": ("testclient", 50000),
-        "server": ("testserver", 80),
-    }
-
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    body = bytearray()
-
-    async def send(message: dict[str, Any]) -> None:
-        if message["type"] == "http.response.body":
-            body.extend(message.get("body", b""))
-
-    await app(scope, receive, send)
-    return json.loads(bytes(body))
 
 
 @asynccontextmanager
@@ -260,8 +226,8 @@ class TestEagerASGI:
         def route(db: Database = Depends(get_db)) -> dict[str, int]:
             return {"id": id(db)}
 
-        first = (await _asgi_get(app, "/id"))["id"]
-        second = (await _asgi_get(app, "/id"))["id"]
+        first = (await asgi_get(app, "/id"))["id"]
+        second = (await asgi_get(app, "/id"))["id"]
 
         assert first == second
         assert builds == 1
@@ -281,7 +247,7 @@ class TestEagerASGI:
         def route(db: Database = Depends(get_db)) -> dict[str, str]:
             return {"url": db.url}
 
-        assert (await _asgi_get(app, "/url"))["url"] == "preset://"
+        assert (await asgi_get(app, "/url"))["url"] == "preset://"
 
     async def test_none_value_is_cached_across_requests(self) -> None:
         builds = 0
@@ -297,8 +263,8 @@ class TestEagerASGI:
         def route(value: None = Depends(get_maybe)) -> dict[str, int]:
             return {"builds": builds}
 
-        await _asgi_get(app, "/n")
-        await _asgi_get(app, "/n")
+        await asgi_get(app, "/n")
+        await asgi_get(app, "/n")
 
         # A legitimate None result is cached, not rebuilt on each request.
         assert builds == 1
@@ -315,7 +281,7 @@ class TestEagerASGI:
         def route(value: None = Depends(get_maybe)) -> dict[str, bool]:
             return {"is_none": value is None}
 
-        assert (await _asgi_get(app, "/n"))["is_none"] is True
+        assert (await asgi_get(app, "/n"))["is_none"] is True
 
     async def test_concurrent_requests_build_a_single_instance(self) -> None:
         builds = 0
@@ -333,9 +299,7 @@ class TestEagerASGI:
         async def route(db: Database = Depends(get_db)) -> dict[str, int]:
             return {"id": id(db)}
 
-        first, second = await asyncio.gather(
-            _asgi_get(app, "/id"), _asgi_get(app, "/id")
-        )
+        first, second = await asyncio.gather(asgi_get(app, "/id"), asgi_get(app, "/id"))
 
         assert first["id"] == second["id"]
         assert builds == 1
@@ -432,8 +396,8 @@ class TestLazy:
         container = FastAPIContainer(app_state=AppState.from_app(app))
         app.state.container = container
 
-        first = (await _asgi_get(app, "/id"))["id"]
-        second = (await _asgi_get(app, "/id"))["id"]
+        first = (await asgi_get(app, "/id"))["id"]
+        second = (await asgi_get(app, "/id"))["id"]
 
         assert first == second
         assert builds == 1
@@ -460,7 +424,7 @@ class TestLazy:
 
         app.state.db = Database("preset://")
 
-        assert (await _asgi_get(app, "/url"))["url"] == "preset://"
+        assert (await asgi_get(app, "/url"))["url"] == "preset://"
 
     @pytest.mark.skipif(
         not _LIFESPAN_SUPPORTED, reason="FastAPI(lifespan=...) unsupported < 0.93"
@@ -491,8 +455,8 @@ class TestLazy:
             return {"id": id(conn)}
 
         async with _asgi_lifespan(app):
-            first = (await _asgi_get(app, "/id"))["id"]
-            second = (await _asgi_get(app, "/id"))["id"]
+            first = (await asgi_get(app, "/id"))["id"]
+            second = (await asgi_get(app, "/id"))["id"]
             assert first == second
             assert events == ["open"]
 
@@ -511,7 +475,7 @@ class TestLazy:
             return {"url": db.url}
 
         with pytest.raises(RuntimeError, match="needs a FastAPIContainer"):
-            await _asgi_get(app, "/url")
+            await asgi_get(app, "/url")
 
 
 class TestCrossMode:
@@ -533,7 +497,7 @@ class TestCrossMode:
         container = FastAPIContainer(app_state=AppState.from_app(app))
         built = await container.get(get_db)
 
-        served = (await _asgi_get(app, "/id"))["id"]
+        served = (await asgi_get(app, "/id"))["id"]
 
         assert served == id(built)
         assert builds == 1

@@ -840,6 +840,9 @@ marker only.
 
 The marker is the `__fastapi_loop_safe__` attribute, shared with
 `fastapi-cache-di`: a callable marked by either library is recognised by both.
+The library's own `get_app_state` and `get_container` are already marked, so
+under `fastapi-cache-di`'s threadpool patch they run inline in requests too.
+An override of either is judged on its own marker.
 
 The container tells coroutines and generators apart exactly like FastAPI 0.143.1,
 whatever FastAPI version is installed: `functools.partial` and `functools.wraps`

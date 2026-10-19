@@ -64,7 +64,7 @@ from fastapi_standalone_di._compat import (
     is_gen_callable,
 )
 from fastapi_standalone_di.app_state import AppState, get_app_state
-from fastapi_standalone_di.execution import is_loop_safe
+from fastapi_standalone_di.execution import is_loop_safe, loop_safe
 from fastapi_standalone_di.registration import RegistrableDependency
 
 T = TypeVar("T")
@@ -1130,6 +1130,7 @@ class ResolutionScope:
         return ResolvedDependencies({_resolve_callable(call): instance}, collected)
 
 
+@loop_safe
 def get_container(
     app_state: AppState = Depends(get_app_state),
 ) -> FastAPIContainer:
@@ -1137,6 +1138,9 @@ def get_container(
 
     Register the container in ``app_state`` at startup, e.g. via
     ``set_app_state_value("container", FastAPIContainer(...))``.
+
+    Marked :func:`~fastapi_standalone_di.execution.loop_safe`: its body must
+    never block.
     """
     container: FastAPIContainer | None = app_state.get("container")
     if container is None:
@@ -1147,6 +1151,7 @@ def get_container(
     return container
 
 
+@loop_safe
 def _get_container_optional(
     app_state: AppState = Depends(get_app_state),
 ) -> "FastAPIContainer | None":
@@ -1159,6 +1164,9 @@ def _get_container_optional(
     fails; the wrapper itself raises only on a genuine cache miss with no
     container available. Under :class:`FastAPIContainer` it is seeded to the
     resolving container, exactly like :func:`get_container`.
+
+    Marked :func:`~fastapi_standalone_di.execution.loop_safe`: its body must
+    never block.
     """
     container: FastAPIContainer | None = app_state.get("container")
     return container

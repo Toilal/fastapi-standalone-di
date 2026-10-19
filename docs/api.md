@@ -193,7 +193,7 @@ def get_app_state(request: HTTPConnection = None) -> AppState
 FastAPI dependency returning an `AppState`. When injected by FastAPI, `request` is
 provided and the `AppState` delegates to `request.app.state`; resolved standalone
 (e.g. via `FastAPIContainer`) `request` is `None` and the standalone singleton is
-used.
+used. Marked [`loop_safe`](#loop_safe).
 
 ### set_app_state_value
 
@@ -215,7 +215,7 @@ in `app_state` at startup, e.g. via
 `set_app_state_value("container", FastAPIContainer(...))`. Raises `RuntimeError`
 if no container is registered. When resolved *through* a container, it yields that
 container itself, so `Depends(get_container)` works standalone without registering
-anything.
+anything. Marked [`loop_safe`](#loop_safe).
 
 ### container_lifespan
 

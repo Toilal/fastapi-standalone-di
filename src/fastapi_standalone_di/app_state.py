@@ -26,6 +26,8 @@ from fastapi import FastAPI
 from starlette.datastructures import State
 from starlette.requests import HTTPConnection
 
+from fastapi_standalone_di.execution import loop_safe
+
 
 class AppState:
     """Abstraction over Starlette's ``State`` that works with and without a request.
@@ -101,6 +103,7 @@ class AppState:
 # --- FastAPI dependency -------------------------------------------------------
 
 
+@loop_safe
 def get_app_state(
     request: HTTPConnection = None,  # type: ignore[assignment]
 ) -> AppState:
@@ -110,6 +113,9 @@ def get_app_state(
     returned ``AppState`` delegates to ``request.app.state``. When resolved
     outside ASGI (e.g. via :class:`FastAPIContainer`), *request* is ``None`` and
     the standalone singleton is used instead.
+
+    Marked :func:`~fastapi_standalone_di.execution.loop_safe`: its body must
+    never block.
     """
     if request is not None:
         return AppState.from_request(request)

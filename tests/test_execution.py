@@ -1,20 +1,27 @@
 """Tests for the loop-safe execution model of sync dependencies."""
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
+from typing import Any
 
 import pytest
-from fastapi import Depends
+from _asgi import asgi_get
+from fastapi import Depends, FastAPI
+from starlette.concurrency import run_in_threadpool
 
 from fastapi_standalone_di import (
+    AppState,
     DependencyScope,
     FastAPIContainer,
+    get_app_state,
+    get_container,
     is_loop_safe,
     loop_safe,
     singleton,
 )
 from fastapi_standalone_di.execution import LOOP_SAFE_ATTR
+from fastapi_standalone_di.resolve import _get_container_optional
 
 
 class Plain:
@@ -86,6 +93,13 @@ def test_marker_is_not_inherited() -> None:
 
 def test_partial_of_a_marked_function_is_loop_safe() -> None:
     assert is_loop_safe(partial(marked_fn))
+
+
+@pytest.mark.parametrize(
+    "dependency", [get_app_state, get_container, _get_container_optional]
+)
+def test_built_in_dependencies_are_loop_safe(dependency: Callable[..., Any]) -> None:
+    assert is_loop_safe(dependency)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +174,42 @@ async def test_marked_override_of_an_unmarked_original_runs_on_the_loop() -> Non
     assert await container.get(plain_fn) == loop_thread
 
 
+async def test_unmarked_override_of_get_app_state_uses_the_threadpool() -> None:
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+
+    def override() -> AppState:
+        threads.append(threading.get_ident())
+        return AppState.standalone()
+
+    container = FastAPIContainer(dependency_overrides={get_app_state: override})
+    await container.get(get_app_state)
+
+    assert len(threads) == 1
+    assert threads[0] != loop_thread
+
+
+@pytest.mark.parametrize("inline_classes", [False, True])
+async def test_seeded_built_in_dependencies_never_reach_the_threadpool(
+    inline_classes: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hops: list[Callable[..., Any]] = []
+
+    async def spy(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        hops.append(func)
+        return await run_in_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr("fastapi_standalone_di.resolve.run_in_threadpool", spy)
+    container = FastAPIContainer(inline_classes=inline_classes)
+
+    for _ in range(2):
+        assert await container.get(get_app_state) is AppState.standalone()
+        assert await container.get(get_container) is container
+        container.clear_cache()
+
+    assert hops == []
+
+
 async def test_exception_from_an_inlined_init_propagates() -> None:
     container = FastAPIContainer(inline_classes=True)
 
@@ -220,3 +270,85 @@ async def test_singleton_ignores_the_container_inline_classes_option() -> None:
     container = FastAPIContainer(inline_classes=True)
 
     assert (await container.get(get_plain)).thread != loop_thread
+
+
+# ---------------------------------------------------------------------------
+# FastAPI requests under fastapi-cache-di's threadpool patch
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def threadpool_hops(monkeypatch: pytest.MonkeyPatch) -> list[Callable[..., Any]]:
+    """Reproduce fastapi-cache-di's patch and record what still hops.
+
+    Like ``patch_fastapi_run_in_threadpool``, the replacement calls loop-safe
+    dependencies inline and sends every other one to the threadpool.
+    """
+    hops: list[Callable[..., Any]] = []
+
+    async def run_loop_safe_inline(
+        func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        if is_loop_safe(func):
+            return func(*args, **kwargs)
+        hops.append(func)
+        return await run_in_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "fastapi.dependencies.utils.run_in_threadpool", run_loop_safe_inline
+    )
+    return hops
+
+
+async def test_built_in_dependencies_run_inline_under_the_patch(
+    threadpool_hops: list[Callable[..., Any]],
+) -> None:
+    get_lazy = singleton(Plain, key="execution-test-lazy", lazy=True)
+    app = FastAPI()
+    container = FastAPIContainer(app_state=AppState.from_app(app))
+    app.state.container = container
+
+    @app.get("/deps")
+    async def route(
+        app_state: AppState = Depends(get_app_state),
+        resolved: FastAPIContainer = Depends(get_container),
+        lazy: Plain = Depends(get_lazy),
+        _: int = Depends(plain_fn),
+    ) -> dict[str, bool]:
+        return {
+            "app_state": app_state.get("container") is container,
+            "container": resolved is container,
+            "lazy": isinstance(lazy, Plain),
+        }
+
+    body = await asgi_get(app, "/deps")
+
+    assert body == {"app_state": True, "container": True, "lazy": True}
+    assert threadpool_hops == [plain_fn]
+
+
+async def test_unmarked_override_of_get_app_state_hops_under_the_patch(
+    threadpool_hops: list[Callable[..., Any]],
+) -> None:
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+
+    def override() -> AppState:
+        threads.append(threading.get_ident())
+        return AppState.standalone()
+
+    app = FastAPI()
+    app.dependency_overrides[get_app_state] = override
+
+    @app.get("/state")
+    async def route(
+        app_state: AppState = Depends(get_app_state),
+    ) -> dict[str, bool]:
+        return {"overridden": app_state is AppState.standalone()}
+
+    body = await asgi_get(app, "/state")
+
+    assert body == {"overridden": True}
+    assert threadpool_hops == [override]
+    assert len(threads) == 1
+    assert threads[0] != loop_thread
