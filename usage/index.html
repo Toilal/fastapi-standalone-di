@@ -1509,7 +1509,10 @@ must stay in the threadpool. The decision applies to the callable actually calle
 after <code>dependency_overrides</code>. <code>singleton()</code> follows the factory's own <code>loop_safe</code>
 marker only.</p>
 <p>The marker is the <code>__fastapi_loop_safe__</code> attribute, shared with
-<code>fastapi-cache-di</code>: a callable marked by either library is recognised by both.</p>
+<code>fastapi-cache-di</code>: a callable marked by either library is recognised by both.
+The library's own <code>get_app_state</code> and <code>get_container</code> are already marked, so
+under <code>fastapi-cache-di</code>'s threadpool patch they run inline in requests too.
+An override of either is judged on its own marker.</p>
 <p>The container tells coroutines and generators apart exactly like FastAPI 0.143.1,
 whatever FastAPI version is installed: <code>functools.partial</code> and <code>functools.wraps</code>
 wrappers are unwrapped, and a class is never classified through its <code>__call__</code>.</p>
