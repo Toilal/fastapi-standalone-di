@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.12.1 (2026-10-20)
+
+### Performance Improvements
+
+- Mark the built-in dependencies as loop-safe
+  ([`16a1f09`](https://github.com/Toilal/fastapi-standalone-di/commit/16a1f099af088cda22e75f57ffa1a46da55a382f))
+
+
 ## v0.12.0 (2026-10-16)
 
 ### Bug Fixes
