@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.13.0 (2026-10-25)
+
+### Bug Fixes
+
+- Never raise from a cache path naming no file, and tell what sharing one costs
+  ([#64](https://github.com/Toilal/fastapi-standalone-di/pull/64),
+  [`1356f3b`](https://github.com/Toilal/fastapi-standalone-di/commit/1356f3b1f3996c4a184de0203c3012812aa80679))
+
+### Features
+
+- Cache the auto_bindings AST pre-filter analysis on disk
+  ([#64](https://github.com/Toilal/fastapi-standalone-di/pull/64),
+  [`1356f3b`](https://github.com/Toilal/fastapi-standalone-di/commit/1356f3b1f3996c4a184de0203c3012812aa80679))
+
+
 ## v0.12.1 (2026-10-20)
 
 ### Performance Improvements

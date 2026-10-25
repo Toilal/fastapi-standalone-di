@@ -41,7 +41,7 @@ from fastapi_standalone_di.resolve import (
 )
 from fastapi_standalone_di.singleton import singleton
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 
 __all__ = [
     "AppState",
