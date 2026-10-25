@@ -1790,6 +1790,30 @@ class TestAstCache:
         monkeypatch.setattr(sys.implementation, "cache_tag", None)
         assert discovery._analyzer_fingerprint().startswith(f"{__version__}+")
 
+    def test_a_descriptor_that_cannot_be_wrapped_is_closed_and_leaves_nothing(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "cache" / "bindings.json"
+        closed: list[int] = []
+        real_close = os.close
+
+        def failing_fdopen(*_args: object, **_kwargs: object) -> None:
+            raise OSError("no buffer")
+
+        def recording_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        monkeypatch.setattr(discovery.os, "fdopen", failing_fdopen)
+        monkeypatch.setattr(discovery.os, "close", recording_close)
+        assert _select(root, cache_file) == _select(root, None)
+        assert closed
+        assert list(cache_file.parent.iterdir()) == []
+
     def test_an_empty_path_means_no_cache(
         self,
         make_package: Callable[[dict[str, str]], str],
