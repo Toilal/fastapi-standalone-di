@@ -408,6 +408,7 @@ def auto_bindings(
     recursive: bool = True,
     conflict_solver: ConflictSolver | None = None,
     ast: bool = True,
+    cache_file: str | os.PathLike[str] | None = None,
 ) -> list[Binding]
 ```
 
@@ -434,6 +435,16 @@ binds each interface to the implementation that declares it as a **direct** base
   hold an interface or implementation are imported (default `True`); set `False`
   to import every module (running their import-time side effects) when
   implementations are synthesised at import time and so invisible to the analysis.
+- `cache_file` — persist the `ast` pre-filter's per-module analysis to this JSON
+  file, keyed by a checksum of each module's source, so a later call re-parses
+  only the modules whose source changed (default `None`: no cache). The file and
+  its parent directory are created as needed and rewritten atomically (a sibling
+  temporary file swapped in by `os.replace`, so processes starting at once never
+  read a partial file), and only when an entry changed. A cache that is
+  unreadable, corrupt, or written by another version of the library or another
+  Python is ignored and rebuilt; one that cannot be written is logged, never
+  raised. Calls sweeping different packages may share one file, each pruning only
+  the entries of the modules it scans. Ignored with `ast=False`.
 
 When several implementations match one interface, they are ranked before any
 `conflict_solver`: (1) a single [`@provides(primary=True)`](#provides) candidate —

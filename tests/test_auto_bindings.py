@@ -1,9 +1,14 @@
 """Tests for fastapi_standalone_di.discovery.auto_bindings."""
 
+import ast
 import importlib
+import json
+import logging
+import os
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import fastapi.params
 import pytest
@@ -14,7 +19,9 @@ from fastapi_standalone_di import (
     Binding,
     FastAPIContainer,
     RegistrableDependency,
+    __version__,
     auto_bindings,
+    discovery,
     patch_for_registrable_dependency_support,
 )
 from fastapi_standalone_di.registration import _PATCHED_FLAG
@@ -1431,3 +1438,445 @@ def test_analyze_module_returns_none_without_source() -> None:
     from fastapi_standalone_di.discovery import _analyze_module
 
     assert _analyze_module(None) is None
+
+
+_CACHED_TREE = {
+    "contracts/__init__.py": "",
+    "contracts/cache.py": _iface("ICache", "IStore"),
+    "contracts/aliased.py": (
+        "from fastapi_standalone_di import RegistrableDependency as RD\n\n\n"
+        "class IClock(RD): ...\n"
+    ),
+    "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+    "infra/store.py": (
+        f"from {_ROOT}.contracts.cache import *\n\n\nclass SqlStore(IStore): ...\n"
+    ),
+    "infra/clock.py": _provides_factory("build_clock", "IClock", "contracts.aliased"),
+    "infra/dynamic.py": (
+        "def _base() -> type:\n    return object\n\n\nclass Thing(_base()): ...\n"
+    ),
+    "routers/users.py": (
+        f"from {_ROOT}.contracts.cache import ICache\n\n\n"
+        "consumer = ICache\n"
+        "raise RuntimeError('module must not be imported')\n"
+    ),
+    "settings.py": "DEBUG = True\n",
+}
+
+# make_package adds the __init__.py of infra/ and routers/.
+_CACHED_TREE_MODULES = len(_CACHED_TREE) + 2
+
+
+def _select(root: str, cache_file: Path | None) -> list[str]:
+    from fastapi_standalone_di.discovery import _select_modules_ast
+
+    modules = _select_modules_ast(
+        [importlib.import_module(root)],
+        recursive=True,
+        interface_names={root},
+        implementation_names={root},
+        cache_file=cache_file,
+    )
+    return [module.__name__ for module in modules]
+
+
+def _cached_modules(cache_file: Path) -> dict[str, Any]:
+    return cast("dict[str, Any]", json.loads(cache_file.read_bytes())["modules"])
+
+
+@pytest.fixture
+def parse_calls(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Every source the pre-filter hands to ``ast.parse``."""
+    calls: list[bytes] = []
+    real_parse = ast.parse
+
+    def spy(source: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(source)
+        return real_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(discovery.ast, "parse", spy)
+    return calls
+
+
+@pytest.fixture
+def replace_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, Path]]:
+    calls: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def spy(src: Any, dst: Any) -> None:
+        calls.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(discovery.os, "replace", spy)
+    return calls
+
+
+class TestAstCache:
+    """``cache_file``: the pre-filter's per-module analysis is persisted, keyed by
+    the source checksum, and only modules whose source changed are parsed again."""
+
+    def test_cached_and_uncached_select_the_same_modules(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "cache" / "bindings.json"
+        uncached = _select(root, None)
+        assert f"{root}.routers.users" not in uncached
+        assert _select(root, cache_file) == uncached
+        assert cache_file.exists()
+        assert _select(root, cache_file) == uncached
+
+    def test_cached_and_uncached_produce_the_same_bindings(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "bindings.json"
+        interfaces = [
+            _cls(root, "contracts.cache", "ICache"),
+            _cls(root, "contracts.cache", "IStore"),
+            _cls(root, "contracts.aliased", "IClock"),
+        ]
+        results = []
+        for cache in (None, cache_file, cache_file):
+            AppState.reset_standalone()
+            for interface in interfaces:
+                interface.register(None)
+            results.append(auto_bindings(root, cache_file=cache))
+        assert results[0] == results[1] == results[2]
+        assert [b.implementation.__name__ for b in results[0]] == [
+            "build_clock",
+            "RedisCache",
+            "SqlStore",
+        ]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            _iface("ICache"),
+            _impl("RedisCache", "ICache", "contracts.cache"),
+            _provides_factory("build_cache", "ICache", "contracts.cache"),
+            f"from {_ROOT}.contracts.cache import *\n\n\nclass S(IStore): ...\n",
+            "class Thing(make_base()): ...\n",
+            "def (:\n",
+            "",
+        ],
+        ids=["interface", "impl", "provider", "star", "dynamic", "syntax", "empty"],
+    )
+    def test_round_trips_the_analysis(self, source: str, tmp_path: Path) -> None:
+        cache_file = tmp_path / "bindings.json"
+        inventory: dict[str, bytes | None] = {"pkg.mod": source.encode()}
+        expected = discovery._analyze_module(source.encode())
+        cold = discovery._analyze_cached(
+            inventory, cache_file, root_names=["pkg"], recursive=True
+        )
+        warm = discovery._analyze_cached(
+            inventory, cache_file, root_names=["pkg"], recursive=True
+        )
+        assert cold == warm == {"pkg.mod": expected}
+        stored = discovery._read_analysis_cache(cache_file)["pkg.mod"].analysis
+        assert stored == expected
+        assert type(stored) is type(expected)
+        if stored is not None and expected is not None:
+            assert isinstance(stored.base_names, frozenset)
+
+    def test_warm_cache_parses_nothing_and_writes_nothing(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        parse_calls: list[bytes],
+        replace_calls: list[tuple[Path, Path]],
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "bindings.json"
+        _select(root, cache_file)
+        assert len(parse_calls) == _CACHED_TREE_MODULES
+        assert len(replace_calls) == 1
+
+        parse_calls.clear()
+        replace_calls.clear()
+        _select(root, cache_file)
+        assert parse_calls == []
+        assert replace_calls == []
+
+    def test_changed_and_new_modules_are_reanalysed(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        parse_calls: list[bytes],
+    ) -> None:
+        # The changed module was skipped by the first sweep, so only a fresh
+        # analysis of its new source can get it imported and wired.
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/memory.py": _impl("MemoryCache", "ICache", "contracts.cache"),
+                "infra/redis.py": "VALUE = 1\n",
+                "infra/gone.py": "VALUE = 2\n",
+            }
+        )
+        cache_file = tmp_path / "bindings.json"
+        assert auto_bindings(root, cache_file=cache_file)[
+            0
+        ].implementation.__name__ == ("MemoryCache")
+
+        infra = tmp_path / root / "infra"
+        redis = _provides_class("RedisCache", "ICache", "contracts.cache", primary=True)
+        (infra / "redis.py").write_text(redis)
+        (infra / "extra.py").write_text("VALUE = 3\n")
+        (infra / "gone.py").unlink()
+        parse_calls.clear()
+        AppState.reset_standalone()
+        _cls(root, "contracts.cache", "ICache").register(None)
+
+        result = auto_bindings(root, cache_file=cache_file)
+        assert result[0].implementation.__name__ == "RedisCache"
+        assert sorted(parse_calls) == sorted([redis.encode(), b"VALUE = 3\n"])
+        modules = _cached_modules(cache_file)
+        assert f"{root}.infra.extra" in modules
+        assert f"{root}.infra.gone" not in modules
+
+    def test_keeps_the_entries_of_packages_another_call_sweeps(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        parse_calls: list[bytes],
+    ) -> None:
+        root = make_package(
+            {
+                "a/cache.py": _iface("ICache"),
+                "a/redis.py": _impl("RedisCache", "ICache", "a.cache"),
+                "b/clock.py": _iface("IClock"),
+                "b/system.py": _impl("SystemClock", "IClock", "b.clock"),
+            }
+        )
+        cache_file = tmp_path / "bindings.json"
+        auto_bindings(f"{root}.a", cache_file=cache_file)
+        auto_bindings(f"{root}.b", cache_file=cache_file)
+        assert set(_cached_modules(cache_file)) == {
+            f"{root}.a.cache",
+            f"{root}.a.redis",
+            f"{root}.b.clock",
+            f"{root}.b.system",
+        }
+
+        parse_calls.clear()
+        AppState.reset_standalone()
+        _cls(root, "a.cache", "ICache").register(None)
+        auto_bindings(f"{root}.a", cache_file=cache_file)
+        assert parse_calls == []
+
+    def test_module_without_source_is_not_stored(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "bindings.json"
+        analyses = discovery._analyze_cached(
+            {"pkg.compiled": None, "pkg.plain": b""},
+            cache_file,
+            root_names=["pkg"],
+            recursive=True,
+        )
+        assert analyses["pkg.compiled"] is None
+        assert set(_cached_modules(cache_file)) == {"pkg.plain"}
+
+    def test_non_recursive_sweep_keeps_nested_entries(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "bindings.json"
+        inventory: dict[str, bytes | None] = {
+            "pkg.top": b"",
+            "pkg.sub": b"",
+            "pkg.sub.deep": b"",
+        }
+        discovery._analyze_cached(
+            inventory, cache_file, root_names=["pkg"], recursive=True
+        )
+        discovery._analyze_cached(
+            {"pkg.top": b""}, cache_file, root_names=["pkg"], recursive=False
+        )
+        assert set(_cached_modules(cache_file)) == {"pkg.top", "pkg.sub.deep"}
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            b"{not json",
+            b"\xff\xfe",
+            b"[]",
+            b'{"format": 999, "analyzer": "x", "modules": {}}',
+            b'{"format": 1, "analyzer": "%s", "modules": []}',
+            b'{"format": 1, "analyzer": "%s", "modules": {"m": {"checksum": 1}}}',
+            b'{"format": 1, "analyzer": "%s", "modules": {"m": {"checksum": "c",'
+            b' "analysis": {"defines_marker_subclass": 1}}}}',
+            b'{"format": 1, "analyzer": "%s", "modules": {"m": {"checksum": "c",'
+            b' "analysis": {"defines_marker_subclass": true, "base_names": "abc",'
+            b' "has_provider": false, "has_unresolved_base": false}}}}',
+        ],
+        ids=[
+            "truncated",
+            "binary",
+            "not-an-object",
+            "foreign-format",
+            "modules-not-object",
+            "bad-checksum",
+            "bad-flag",
+            "bad-base-names",
+        ],
+    )
+    def test_ignores_and_rewrites_an_invalid_cache(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        content: bytes,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        expected = _select(root, None)
+        cache_file = tmp_path / "bindings.json"
+        if b"%s" in content:
+            content = content % discovery._analyzer_fingerprint().encode()
+        cache_file.write_bytes(content)
+
+        with caplog.at_level(logging.DEBUG, logger=discovery.__name__):
+            assert _select(root, cache_file) == expected
+        assert sum(str(cache_file) in r.getMessage() for r in caplog.records) == 1
+        assert len(_cached_modules(cache_file)) == _CACHED_TREE_MODULES
+
+    def test_another_analyzer_invalidates_every_entry(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        parse_calls: list[bytes],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "bindings.json"
+        _select(root, cache_file)
+
+        monkeypatch.setattr(discovery, "_analyzer_fingerprint", lambda: "9.9.9+other")
+        parse_calls.clear()
+        _select(root, cache_file)
+        assert len(parse_calls) == _CACHED_TREE_MODULES
+        assert json.loads(cache_file.read_bytes())["analyzer"] == "9.9.9+other"
+
+    def test_fingerprint_carries_the_library_version(self) -> None:
+        assert discovery._analyzer_fingerprint().startswith(f"{__version__}+")
+
+    def test_creates_missing_parent_directories_from_a_str_path(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "a" / "b" / "bindings.json"
+        auto_bindings(root, cache_file=str(cache_file))
+        assert len(_cached_modules(cache_file)) == _CACHED_TREE_MODULES
+
+    def test_unwritable_location_does_not_raise(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        expected = _select(root, None)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        cache_file = blocker / "bindings.json"
+
+        with caplog.at_level(logging.INFO, logger=discovery.__name__):
+            assert _select(root, cache_file) == expected
+        assert "Cannot write" in caplog.text
+
+    @pytest.mark.skipif(
+        not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="permission bits do not bind root",
+    )
+    def test_read_only_directory_does_not_raise(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        expected = _select(root, None)
+        read_only = tmp_path / "read-only"
+        read_only.mkdir()
+        read_only.chmod(0o500)
+        try:
+            assert _select(root, read_only / "bindings.json") == expected
+            assert list(read_only.iterdir()) == []
+        finally:
+            read_only.chmod(0o700)
+
+    def test_unreadable_cache_is_ignored(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        expected = _select(root, None)
+        cache_file = tmp_path / "bindings.json"
+        cache_file.mkdir()
+        assert _select(root, cache_file) == expected
+
+    def test_writes_through_a_sibling_temporary_file(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "cache" / "bindings.json"
+        swapped: list[Path] = []
+        real_replace = os.replace
+
+        def checking_replace(src: Any, dst: Any) -> None:
+            # Whatever a concurrent reader opens is either the previous file or
+            # this complete one: the payload is whole before it is swapped in.
+            assert Path(dst) == cache_file
+            assert Path(src).parent == cache_file.parent
+            assert json.loads(Path(src).read_bytes())["modules"]
+            swapped.append(Path(src))
+            real_replace(src, dst)
+
+        monkeypatch.setattr(discovery.os, "replace", checking_replace)
+        _select(root, cache_file)
+        assert len(swapped) == 1
+        assert sorted(cache_file.parent.iterdir()) == [cache_file]
+
+    @pytest.mark.parametrize("error", [OSError("disk full"), KeyboardInterrupt()])
+    def test_a_failed_write_leaves_the_previous_cache_whole(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        error: BaseException,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        cache_file = tmp_path / "cache" / "bindings.json"
+        _select(root, cache_file)
+        previous = cache_file.read_bytes()
+        (tmp_path / root / "settings.py").write_text("DEBUG = False\n")
+
+        real_fdopen = os.fdopen
+
+        def failing_fdopen(fd: int, *args: Any, **kwargs: Any) -> Any:
+            handle = real_fdopen(fd, *args, **kwargs)
+            real_write = handle.write
+
+            def write(data: bytes) -> int:
+                real_write(data[: len(data) // 2])
+                raise error
+
+            handle.write = write
+            return handle
+
+        monkeypatch.setattr(discovery.os, "fdopen", failing_fdopen)
+        if isinstance(error, OSError):
+            _select(root, cache_file)
+        else:
+            with pytest.raises(KeyboardInterrupt):
+                _select(root, cache_file)
+        assert cache_file.read_bytes() == previous
+        assert sorted(cache_file.parent.iterdir()) == [cache_file]
+
+    def test_ignored_without_the_prefilter(
+        self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
+    ) -> None:
+        root = make_package(
+            {
+                "contracts/cache.py": _iface("ICache"),
+                "infra/redis.py": _impl("RedisCache", "ICache", "contracts.cache"),
+            }
+        )
+        cache_file = tmp_path / "bindings.json"
+        auto_bindings(root, ast=False, cache_file=cache_file)
+        assert not cache_file.exists()

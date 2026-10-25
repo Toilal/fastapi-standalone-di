@@ -20,13 +20,17 @@ point can wire an explicit subset of features rather than a whole subtree.
 """
 
 import ast
+import functools
+import hashlib
 import importlib
 import importlib.util
 import inspect
+import json
 import logging
 import os
 import pkgutil
 import sys
+import uuid
 from collections.abc import (
     AsyncGenerator,
     AsyncIterable,
@@ -37,8 +41,9 @@ from collections.abc import (
     Iterator,
     Sequence,
 )
+from pathlib import Path
 from types import ModuleType
-from typing import Any, NamedTuple, cast, get_args, get_origin
+from typing import Any, NamedTuple, TypeVar, cast, get_args, get_origin
 
 from fastapi_standalone_di.provides import (
     _PROVIDES_MARKER,
@@ -241,6 +246,7 @@ def auto_bindings(
     recursive: bool = True,
     conflict_solver: ConflictSolver | None = None,
     ast: bool = True,
+    cache_file: str | os.PathLike[str] | None = None,
 ) -> list[Binding]:
     """Wire ``RegistrableDependency`` interfaces to their implementations by convention.
 
@@ -287,6 +293,15 @@ def auto_bindings(
         implementations synthesised at import time — via ``type(...)`` or a
         metaclass, with no ``class`` statement in the source — are invisible to
         this analysis and get skipped; set ``ast=False`` for such a codebase.
+    :param cache_file: persist the pre-filter's per-module analysis to this JSON
+        file, keyed by a checksum of each module's source, so a later call only
+        re-parses the modules whose source changed (default ``None``: no cache).
+        The file and its parent directory are created as needed and rewritten
+        atomically, only when an entry changed; one that is unreadable, corrupt or
+        written by another version of this library is ignored and rebuilt, and one
+        that cannot be written is logged, never raised. Several calls sweeping
+        different packages may share one file: each only prunes the entries of
+        the modules it scans. Ignored with ``ast=False``.
 
     An interface is bound to its single matching implementation. When several
     match, they are ranked before any ``conflict_solver`` is consulted:
@@ -337,6 +352,7 @@ def auto_bindings(
         ast_prefilter=ast,
         interface_names=interface_names,
         implementation_names=implementation_names,
+        cache_file=None if cache_file is None else Path(cache_file),
     )
     for member in members:
         if isinstance(member, type) and RegistrableDependency in member.__bases__:
@@ -602,6 +618,7 @@ def _scan_members(
     ast_prefilter: bool,
     interface_names: set[str],
     implementation_names: set[str],
+    cache_file: Path | None,
 ) -> list[Any]:
     modules = _select_modules(
         interface_roots,
@@ -610,6 +627,7 @@ def _scan_members(
         ast_prefilter=ast_prefilter,
         interface_names=interface_names,
         implementation_names=implementation_names,
+        cache_file=cache_file,
     )
     members: dict[str, Any] = {}
     for module in modules:
@@ -628,6 +646,7 @@ def _select_modules(
     ast_prefilter: bool,
     interface_names: set[str],
     implementation_names: set[str],
+    cache_file: Path | None,
 ) -> list[ModuleType]:
     """The modules to inspect for members, importing each exactly once.
 
@@ -652,6 +671,7 @@ def _select_modules(
         recursive=recursive,
         interface_names=interface_names,
         implementation_names=implementation_names,
+        cache_file=cache_file,
     )
 
 
@@ -661,6 +681,7 @@ def _select_modules_ast(
     recursive: bool,
     interface_names: set[str],
     implementation_names: set[str],
+    cache_file: Path | None,
 ) -> list[ModuleType]:
     """Import only the descendant modules that may declare an interface or impl.
 
@@ -678,7 +699,9 @@ def _select_modules_ast(
 
     A module whose source cannot be read or parsed, or that carries a base class
     the analysis cannot resolve statically, is imported unconditionally — the
-    filter only ever skips a module it can prove holds nothing relevant.
+    filter only ever skips a module it can prove holds nothing relevant. With a
+    *cache_file*, the analysis of a module whose source is unchanged is read back
+    rather than parsed again (see :func:`_analyze_cached`).
     """
     inventory: dict[str, bytes | None] = {}
     for root in roots:
@@ -690,7 +713,15 @@ def _select_modules_ast(
         ):
             inventory.setdefault(name, source)
 
-    analyses = {name: _analyze_module(source) for name, source in inventory.items()}
+    if cache_file is None:
+        analyses = {name: _analyze_module(source) for name, source in inventory.items()}
+    else:
+        analyses = _analyze_cached(
+            inventory,
+            cache_file,
+            root_names=[root.__name__ for root in roots],
+            recursive=recursive,
+        )
     imported: dict[str, ModuleType] = {}
 
     for name in inventory:
@@ -835,6 +866,175 @@ def _analyze_module(source: bytes | None) -> _ModuleAnalysis | None:
     return _ModuleAnalysis(
         defines_marker, frozenset(base_names), has_provider, unresolved
     )
+
+
+_CACHE_FORMAT = 1
+
+_T = TypeVar("_T")
+
+
+class _CachedAnalysis(NamedTuple):
+    checksum: str
+    analysis: _ModuleAnalysis | None
+
+
+def _analyze_cached(
+    inventory: dict[str, bytes | None],
+    cache_file: Path,
+    *,
+    root_names: list[str],
+    recursive: bool,
+) -> dict[str, _ModuleAnalysis | None]:
+    """:func:`_analyze_module` over *inventory*, reusing *cache_file*'s entries.
+
+    Only a module whose source checksum differs from its stored entry is parsed.
+    The entries of modules outside the swept scope are carried over untouched, so
+    calls sweeping different packages can share one file without evicting each
+    other's analyses.
+    """
+    stored = _read_analysis_cache(cache_file)
+    entries: dict[str, _CachedAnalysis] = {}
+    analyses: dict[str, _ModuleAnalysis | None] = {}
+    for name, source in inventory.items():
+        if source is None:
+            analyses[name] = None
+            continue
+        checksum = hashlib.sha256(source).hexdigest()
+        entry = stored.get(name)
+        if entry is None or entry.checksum != checksum:
+            entry = _CachedAnalysis(checksum, _analyze_module(source))
+        entries[name] = entry
+        analyses[name] = entry.analysis
+
+    for name, entry in stored.items():
+        if name not in inventory and not _in_scope(name, root_names, recursive):
+            entries[name] = entry
+
+    if entries != stored:
+        _write_analysis_cache(cache_file, entries)
+    return analyses
+
+
+def _in_scope(module_name: str, root_names: list[str], recursive: bool) -> bool:
+    for root in root_names:
+        if module_name.startswith(f"{root}."):
+            if recursive or "." not in module_name[len(root) + 1 :]:
+                return True
+    return False
+
+
+@functools.cache
+def _analyzer_fingerprint() -> str:
+    """Identifies the analysis that produced a cache, beyond the library version.
+
+    Hashing this module's own source catches an edited analysis that kept its
+    version (an editable install); the interpreter's tag catches a source whose
+    parse depends on the Python grammar.
+    """
+    from fastapi_standalone_di import __version__
+
+    digest = hashlib.sha256(sys.implementation.cache_tag.encode())
+    source = _read_source(__file__)
+    if source is not None:
+        digest.update(source)
+    return f"{__version__}+{digest.hexdigest()[:16]}"
+
+
+def _read_analysis_cache(cache_file: Path) -> dict[str, _CachedAnalysis]:
+    try:
+        raw = cache_file.read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        logger.info(
+            "Cannot read auto_bindings cache %s, ignoring it: %s", cache_file, exc
+        )
+        return {}
+    try:
+        data = json.loads(raw)
+        if (
+            data.get("format") != _CACHE_FORMAT
+            or data.get("analyzer") != _analyzer_fingerprint()
+        ):
+            logger.debug("Discarding stale auto_bindings cache %s", cache_file)
+            return {}
+        return {
+            _expect(name, str): _decode_entry(entry)
+            for name, entry in _expect(data["modules"], dict).items()
+        }
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        logger.info(
+            "Unreadable auto_bindings cache %s, ignoring it: %r", cache_file, exc
+        )
+        return {}
+
+
+def _decode_entry(entry: Any) -> _CachedAnalysis:
+    checksum = _expect(_expect(entry, dict)["checksum"], str)
+    raw = entry["analysis"]
+    if raw is None:
+        return _CachedAnalysis(checksum, None)
+    raw = _expect(raw, dict)
+    base_names = _expect(raw["base_names"], list)
+    return _CachedAnalysis(
+        checksum,
+        _ModuleAnalysis(
+            defines_marker_subclass=_expect(raw["defines_marker_subclass"], bool),
+            base_names=frozenset(_expect(name, str) for name in base_names),
+            has_provider=_expect(raw["has_provider"], bool),
+            has_unresolved_base=_expect(raw["has_unresolved_base"], bool),
+        ),
+    )
+
+
+def _expect(value: Any, kind: type[_T]) -> _T:
+    if not isinstance(value, kind):
+        raise TypeError(f"expected {kind.__name__}, got {type(value).__name__}")
+    return value
+
+
+def _encode_entry(entry: _CachedAnalysis) -> dict[str, Any]:
+    analysis = entry.analysis
+    return {
+        "checksum": entry.checksum,
+        "analysis": None
+        if analysis is None
+        else {
+            "defines_marker_subclass": analysis.defines_marker_subclass,
+            "base_names": sorted(analysis.base_names),
+            "has_provider": analysis.has_provider,
+            "has_unresolved_base": analysis.has_unresolved_base,
+        },
+    }
+
+
+def _write_analysis_cache(
+    cache_file: Path, entries: dict[str, _CachedAnalysis]
+) -> None:
+    payload = json.dumps(
+        {
+            "format": _CACHE_FORMAT,
+            "analyzer": _analyzer_fingerprint(),
+            "modules": {name: _encode_entry(entries[name]) for name in sorted(entries)},
+        },
+        separators=(",", ":"),
+    ).encode()
+    # Several processes may start at once (server workers, pytest-xdist): a
+    # temporary file of the same directory swapped in by os.replace never exposes
+    # a truncated cache. os.open keeps the umask-derived mode mkstemp would not.
+    temporary_file = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(temporary_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+            os.replace(temporary_file, cache_file)
+        except BaseException:
+            temporary_file.unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        logger.info("Cannot write auto_bindings cache %s: %s", cache_file, exc)
 
 
 def _base_simple_name(node: ast.expr) -> str | None:
