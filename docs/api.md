@@ -444,7 +444,11 @@ binds each interface to the implementation that declares it as a **direct** base
   unreadable, corrupt, or written by another version of the library or another
   Python is ignored and rebuilt; one that cannot be written is logged, never
   raised. Calls sweeping different packages may share one file, each pruning only
-  the entries of the modules it scans. Ignored with `ast=False`.
+  the entries of the modules it scans; two writing at the same moment keep the
+  last one's entries, which costs the other a re-parse on its next start, never a
+  wrong selection. An empty path means no cache. Ignored with `ast=False`.
+  The file decides which modules are *not* imported, so keep it where only the
+  application can write.
 
 When several implementations match one interface, they are ranked before any
 `conflict_solver`: (1) a single [`@provides(primary=True)`](#provides) candidate —

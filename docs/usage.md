@@ -360,11 +360,13 @@ packages to find their classes, so call it once at bootstrap.
 
 On a large tree, the static pre-filter that keeps unrelated modules from being
 imported (`ast=True`, the default) still reads and parses every module's source on
-each call. Pass `cache_file=Path(".cache/auto_bindings.json")` to persist that
+each call. Pass `cache_file=` an absolute path in a directory of your own (e.g.
+`Path(platformdirs.user_cache_dir("myapp")) / "auto_bindings.json"`) to persist that
 analysis keyed by each module's source checksum: a later start re-parses only the
-modules that changed. The cache is opt-in, safe for several processes starting at
-once, and rebuilt whenever it is corrupt or was written by another library version
-(see [`auto_bindings`](./api.md#auto_bindings)).
+modules that changed. A relative path resolves against the working directory,
+which a service manager may set elsewhere. The cache is opt-in, safe for several
+processes starting at once, and rebuilt whenever it is corrupt or was written by
+another library version (see [`auto_bindings`](./api.md#auto_bindings)).
 
 When several implementations match one interface, mark the one to bind with
 [`@provides(primary=True)`](./api.md#provides) — it wins the tie with no extra wiring,

@@ -352,7 +352,7 @@ def auto_bindings(
         ast_prefilter=ast,
         interface_names=interface_names,
         implementation_names=implementation_names,
-        cache_file=None if cache_file is None else Path(cache_file),
+        cache_file=Path(cache_file) if cache_file else None,
     )
     for member in members:
         if isinstance(member, type) and RegistrableDependency in member.__bases__:
@@ -933,7 +933,7 @@ def _analyzer_fingerprint() -> str:
     """
     from fastapi_standalone_di import __version__
 
-    digest = hashlib.sha256(sys.implementation.cache_tag.encode())
+    digest = hashlib.sha256((sys.implementation.cache_tag or "").encode())
     source = _read_source(__file__)
     if source is not None:
         digest.update(source)
@@ -1022,18 +1022,26 @@ def _write_analysis_cache(
     # Several processes may start at once (server workers, pytest-xdist): a
     # temporary file of the same directory swapped in by os.replace never exposes
     # a truncated cache. os.open keeps the umask-derived mode mkstemp would not.
-    temporary_file = cache_file.with_name(f".{cache_file.name}.{uuid.uuid4().hex}.tmp")
     try:
+        # A path naming no file ("." or "/") has no sibling to write: ValueError.
+        temporary_file = cache_file.with_name(
+            f".{cache_file.name}.{uuid.uuid4().hex}.tmp"
+        )
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(temporary_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
         try:
-            with os.fdopen(fd, "wb") as handle:
+            try:
+                handle = os.fdopen(fd, "wb")
+            except BaseException:
+                os.close(fd)
+                raise
+            with handle:
                 handle.write(payload)
             os.replace(temporary_file, cache_file)
         except BaseException:
             temporary_file.unlink(missing_ok=True)
             raise
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         logger.info("Cannot write auto_bindings cache %s: %s", cache_file, exc)
 
 

@@ -1515,6 +1515,13 @@ class TestAstCache:
     """``cache_file``: the pre-filter's per-module analysis is persisted, keyed by
     the source checksum, and only modules whose source changed are parsed again."""
 
+    @pytest.fixture(autouse=True)
+    def _fresh_fingerprint(self) -> Iterator[None]:
+        # Memoized for the process: a test that patches what it hashes must not
+        # leave its fingerprint to the next one.
+        yield
+        discovery._analyzer_fingerprint.cache_clear()
+
     def test_cached_and_uncached_select_the_same_modules(
         self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
     ) -> None:
@@ -1755,6 +1762,63 @@ class TestAstCache:
 
     def test_fingerprint_carries_the_library_version(self) -> None:
         assert discovery._analyzer_fingerprint().startswith(f"{__version__}+")
+
+    def test_fingerprint_changes_with_the_analysis_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        discovery._analyzer_fingerprint.cache_clear()
+        before = discovery._analyzer_fingerprint()
+        discovery._analyzer_fingerprint.cache_clear()
+        monkeypatch.setattr(
+            discovery, "_read_source", lambda _path: b"an edited analysis"
+        )
+        assert discovery._analyzer_fingerprint() != before
+
+    def test_fingerprint_changes_with_the_interpreter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        discovery._analyzer_fingerprint.cache_clear()
+        before = discovery._analyzer_fingerprint()
+        discovery._analyzer_fingerprint.cache_clear()
+        monkeypatch.setattr(sys.implementation, "cache_tag", "another-python")
+        assert discovery._analyzer_fingerprint() != before
+
+    def test_fingerprint_survives_an_interpreter_with_no_cache_tag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        discovery._analyzer_fingerprint.cache_clear()
+        monkeypatch.setattr(sys.implementation, "cache_tag", None)
+        assert discovery._analyzer_fingerprint().startswith(f"{__version__}+")
+
+    def test_an_empty_path_means_no_cache(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unset environment variable passed straight through reads as ``""``."""
+        root = make_package(_CACHED_TREE)
+        monkeypatch.chdir(tmp_path)
+        written: list[Path] = []
+        monkeypatch.setattr(
+            discovery,
+            "_write_analysis_cache",
+            lambda path, _entries: written.append(path),
+        )
+        auto_bindings(root, cache_file="")
+        assert written == []
+
+    @pytest.mark.parametrize("path", [".", "/"])
+    def test_a_path_naming_no_file_does_not_raise(
+        self,
+        make_package: Callable[[dict[str, str]], str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        path: str,
+    ) -> None:
+        root = make_package(_CACHED_TREE)
+        monkeypatch.chdir(tmp_path)
+        assert _select(root, Path(path)) == _select(root, None)
 
     def test_creates_missing_parent_directories_from_a_str_path(
         self, make_package: Callable[[dict[str, str]], str], tmp_path: Path
